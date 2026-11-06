@@ -1,6 +1,9 @@
 local internet = require("internet")
 local filesystem = require("filesystem")
 local colors = require("colors")
+local term = require("term")
+local component = require("component")
+local gpu = component.gpu
 
 -- ================= НАСТРОЙКИ =================
 local USER = "lixynhay"
@@ -14,9 +17,9 @@ local function getAPIUrl(branch)
 end
 
 local function printStatus(msg, color)
-    if color then term.setTextColor(color) end
-    print(msg)
-    if color then term.setTextColor(colors.white) end
+    if color then gpu.setForeground(color) end
+    term.write(msg .. "\n")
+    if color then gpu.setForeground(colors.white) end
 end
 
 local function drawProgress(current, total, filename)
@@ -27,7 +30,6 @@ local function drawProgress(current, total, filename)
     if string.len(filename) > 30 then filename = string.sub(filename, 1, 27) .. "..." end
     term.clearLine()
     term.write(" [" .. bar .. "] " .. percent .. "% | " .. filename)
-    term.setCursorPos(1, term.getCursorPos())
 end
 
 local function createDirectories(path)
@@ -66,12 +68,8 @@ for _, branch in ipairs(BRANCHES) do
         local rawJson = ""
         for chunk in response do rawJson = rawJson .. chunk end
         
-        -- Если ответ не содержит "Not Found", ветка существует
         if not rawJson:find("Not Found") then
-            -- Извлекаем пути к файлам из JSON без библиотеки json
             for path in rawJson:gmatch('"path":"([^"]+)"') do
-                -- Пропускаем папки (в JSON у папок есть "type":"tree")
-                -- и служебные файлы
                 if not path:match("%.$") and not path:find("%.git") then
                     table.insert(filesToDownload, path)
                 end
