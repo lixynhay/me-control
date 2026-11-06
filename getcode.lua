@@ -1,104 +1,141 @@
 local internet = require("internet")
 local filesystem = require("filesystem")
-local unicode = require("unicode")
+local json = require("json")
+local colors = require("colors")
 
--- НАСТРОЙКИ
--- Замените на ваш репозиторий и ветку, если нужно
+-- ================= НАСТРОЙКИ =================
 local USER = "lixynhay"
 local REPO = "OC-HiTech"
-local BRANCH = "main" -- или "master", если основная ветка называется иначе
+local BRANCHES = {"main", "master"} -- Скрипт сам проверит, какая ветка рабочая
+local TARGET_DIR = "/home/" -- Куда сохранять
+-- =============================================
 
--- Базовый URL для сырых файлов
-local RAW_BASE = "https://raw.githubusercontent.com/" .. USER .. "/" .. REPO .. "/" .. BRANCH .. "/"
--- URL для получения списка файлов через API
-local API_URL = "https://api.github.com/repos/" .. USER .. "/" .. REPO .. "/git/trees/" .. BRANCH .. "?recursive=1"
+local function getAPIUrl(branch)
+    return "https://api.github.com/repos/" .. USER .. "/" .. REPO .. "/git/trees/" .. branch .. "?recursive=1"
+end
 
-local function printProgress(msg)
-    -- Очищаем строку и выводим сообщение
-    io.write("\r" .. string.rep(" ", 80) .. "\r" .. msg)
+local function printStatus(msg, color)
+    if color then term.setTextColor(color) end
+    print(msg)
+    if color then term.setTextColor(colors.white) end
+end
+
+local function drawProgress(current, total, filename)
+    local percent = math.floor((current / total) * 100)
+    local filled = math.floor(percent / 4)
+    local empty = 25 - filled
+    local bar = string.rep("█", filled) .. string.rep("░", empty)
+    
+    -- Обрезаем имя файла, чтобы не ломать прогресс-бар
+    if string.len(filename) > 30 then filename = string.sub(filename, 1, 27) .. "..." end
+    
+    term.clearLine()
+    term.write(" [" .. bar .. "] " .. percent .. "% | " .. filename)
+    term.setCursorPos(1, term.getCursorPos())
+end
+
+local function createDirectories(path)
+    local dir = filesystem.path(path)
+    if dir and not filesystem.exists(dir) then
+        filesystem.makeDirectory(dir)
+    end
 end
 
 local function downloadFile(url, dest)
-    -- Создаем директорию, если её нет
-    local dir = filesystem.concat(filesystem.path(dest), "")
-    if not filesystem.isDirectory(dir) then
-        filesystem.makeDirectory(dir)
-    end
-    
-    -- Скачиваем файл
+    createDirectories(dest)
     local ok, response = pcall(internet.request, url)
-    if not ok then
-        return false, "Ошибка запроса: " .. tostring(response)
-    end
+    if not ok then return false end
     
-    local data = ""
+    local file = io.open(dest, "wb") -- wb для записи байтов без искажений
+    if not file then return false end
+    
+    local success = false
     for chunk in response do
-        data = data .. chunk
+        file:write(chunk)
+        success = true
     end
-    
-    local file = io.open(dest, "w")
-    if not file then
-        return false, "Не удалось открыть файл для записи: " .. dest
-    end
-    file:write(data)
     file:close()
-    
-    return true
+    return success
 end
 
--- 1. Получаем список файлов из репозитория
-printProgress("Получение списка файлов из репозитория...")
-local ok, response = pcall(internet.request, API_URL)
-if not ok then
-    print("\nНе удалось подключиться к GitHub API. Проверьте интернет-карту.")
-    os.exit()
-end
+-- 1. ПОДКЛЮЧЕНИЕ И ПОИСК ВЕТКИ
+term.clear()
+printStatus("=== УСТАНОВЩИК OC-HiTech ===", colors.cyan)
+printStatus("Подключение к GitHub API...", colors.gray)
 
-local jsonData = ""
-for chunk in response do
-    jsonData = jsonData .. chunk
-end
+local treeData = nil
+local activeBranch = nil
 
--- 2. Простой парсинг JSON для получения путей к файлам
--- (Ищем все "path": "...")
-local files = {}
-for path in jsonData:gmatch('"path":"([^"]+)"') do
-    -- Пропускаем папки и файлы, которые не нужно скачивать
-    if not path:match("/$") and not path:match("%.git") then
-        table.insert(files, path)
+for _, branch in ipairs(BRANCHES) do
+    local ok, response = pcall(internet.request, getAPIUrl(branch))
+    if ok then
+        local rawJson = ""
+        for chunk in response do rawJson = rawJson .. chunk end
+        
+        -- Если GitHub вернул не 404, значит ветка существует
+        if not rawJson:find("Not Found") then
+            local pOk, parsed = pcall(json.decode, rawJson)
+            if pOk and parsed and parsed.tree then
+                treeData = parsed
+                activeBranch = branch
+                break
+            end
+        end
     end
 end
 
-if #files == 0 then
-    print("\nНе удалось найти файлы в репозитории. Проверьте название репозитория и ветку.")
-    os.exit()
+if not treeData then
+    printStatus("Ошибка: Не удалось найти репозиторий или ветку!", colors.red)
+    printStatus("Проверьте настройки USER, REPO и наличие интернет-карты.", colors.red)
+    return
 end
 
-print("\nНайдено файлов: " .. #files)
-print("Начинаю скачивание...")
+printStatus("Найдена ветка: " .. activeBranch, colors.green)
 
--- 3. Скачиваем каждый файл
+-- 2. ФИЛЬТРАЦИЯ ФАЙЛОВ
+local filesToDownload = {}
+for _, item in ipairs(treeData.tree) do
+    -- Берем только файлы (blob), пропускаем папки (tree) и скрытые файлы
+    if item.type == "blob" and not item.path:match("^%.") and not item.path:find(".git") then
+        table.insert(filesToDownload, item.path)
+    end
+end
+
+if #filesToDownload == 0 then
+    printStatus("Ошибка: В репозитории не найдено файлов!", colors.red)
+    return
+end
+
+printStatus("Найдено файлов: " .. #filesToDownload, colors.cyan)
+printStatus("Начинаю скачивание...", colors.gray)
+print("")
+
+-- 3. СКАЧИВАНИЕ
+local RAW_BASE = "https://raw.githubusercontent.com/" .. USER .. "/" .. REPO .. "/" .. activeBranch .. "/"
 local successCount = 0
 local failCount = 0
 
-for i, filePath in ipairs(files) do
-    printProgress(string.format("[%d/%d] Скачивание: %s", i, #files, filePath))
+for i, filePath in ipairs(filesToDownload) do
+    drawProgress(i, #filesToDownload, filePath)
     
     local url = RAW_BASE .. filePath
-    local dest = "/home/" .. filePath -- Сохраняем в /home с сохранением структуры папок
+    local dest = TARGET_DIR .. filePath
     
-    local ok, err = downloadFile(url, dest)
-    if ok then
+    if downloadFile(url, dest) then
         successCount = successCount + 1
     else
-        print("\nОшибка при скачивании " .. filePath .. ": " .. tostring(err))
         failCount = failCount + 1
     end
 end
 
-print("\n\nГотово!")
-print("Успешно скачано: " .. successCount)
+-- 4. ИТОГИ
+print("\n")
+printStatus("=== УСТАНОВКА ЗАВЕРШЕНА ===", colors.cyan)
+printStatus("Успешно скачано: " .. successCount, colors.green)
 if failCount > 0 then
-    print("Ошибок: " .. failCount)
+    printStatus("Ошибок при скачивании: " .. failCount, colors.red)
+else
+    printStatus("Все файлы загружены без ошибок!", colors.green)
 end
-print("Все файлы сохранены в /home/")
+
+printStatus("Вы можете запустить игру командой: main.lua", colors.yellow)
