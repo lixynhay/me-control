@@ -6,6 +6,7 @@ local db = require("db")
 local gpu = component.gpu
 local C = config.colors
 local ui = {}
+local formatSize = config.formatSize
 
 function ui.drawFrame(x, y, w, h, color)
     -- Лёгкая тень: тот же прямоугольник на 1 символ правее/ниже, чёрным
@@ -162,7 +163,7 @@ function ui.drawMain(W, H, state)
         ui.drawAdmin(W, H, state.adminList)
         return
     elseif state.currentTab == "STATS" then
-        ui.drawStats(W, H, state.networkInfo or {})
+        ui.drawStats(W, H, state.networkInfo or {}, state.storageInfo)
         return
     elseif state.currentTab == "MON" then
         ui.drawMonitor(W, H, state.monitorStatus or {})
@@ -426,46 +427,108 @@ function ui.drawLogs(W, H, logs, page, totalPages)
     gpu.set(W - unicode.len(pText) - 3, 4, pText)
 end
 
-function ui.drawStats(W, H, info)
+-- Процент заполнения (0..100), безопасен при total == 0
+local function percentOf(used, total)
+    used = tonumber(used) or 0
+    total = tonumber(total)
+    if not total or total <= 0 then return 0 end
+    local pct = math.floor(used / total * 100 + 0.5)
+    if pct < 0 then pct = 0 end
+    if pct > 100 then pct = 100 end
+    return pct
+end
+
+-- Текстовая полоса прогресса шириной width
+local function progressBar(pct, width)
+    local filled = math.floor(pct / 100 * width + 0.5)
+    if filled < 0 then filled = 0 end
+    if filled > width then filled = width end
+    return "[" .. string.rep("█", filled) .. string.rep("░", width - filled) .. "]"
+end
+
+function ui.drawStats(W, H, info, storage)
+    info = info or {}
+    storage = storage or info.storage
     ui.drawFrame(2, 4, W - 3, H - 8, C.border)
     gpu.setForeground(C.title)
     local title = "--- Статистика МЭ-сети ---"
     gpu.set(math.floor((W - unicode.len(title)) / 2) + 1, 4, title)
-    
+
+    local y = 7
+
     gpu.setForeground(C.white)
-    gpu.set(5, 7, "Всего предметов:")
+    gpu.set(5, y, "Всего предметов:")
     gpu.setForeground(C.ok)
-    gpu.set(25, 7, tostring(info.totalItems or 0))
-    
+    gpu.set(25, y, tostring(info.totalItems or 0))
+    y = y + 2
+
     gpu.setForeground(C.white)
-    gpu.set(5, 9, "Типов предметов:")
+    gpu.set(5, y, "Типов предметов:")
     gpu.setForeground(C.ok)
-    gpu.set(25, 9, tostring(info.totalTypes or 0))
-    
+    gpu.set(25, y, tostring(info.totalTypes or 0))
+    y = y + 2
+
     if info.energyStored ~= nil and info.energyMax and info.energyMax > 0 then
         gpu.setForeground(C.white)
-        gpu.set(5, 11, "Энергия:")
+        gpu.set(5, y, "Энергия:")
         gpu.setForeground(C.ok)
-        gpu.set(25, 11, string.format("%d / %d AE", info.energyStored, info.energyMax))
-        local pct = math.floor(info.energyStored / info.energyMax * 100)
-        if pct < 0 then pct = 0 end
-        if pct > 100 then pct = 100 end
-        local filled = math.floor(pct / 5) -- бар на 20 символов
-        if filled < 0 then filled = 0 end
-        if filled > 20 then filled = 20 end
-        local bar = "[" .. string.rep("█", filled) .. string.rep("░", 20 - filled) .. "]"
+        gpu.set(25, y, string.format("%d / %d AE", info.energyStored, info.energyMax))
+        local pct = percentOf(info.energyStored, info.energyMax)
         gpu.setForeground(pct >= 20 and C.ok or C.danger)
-        gpu.set(5, 12, bar .. " " .. tostring(pct) .. "%")
+        gpu.set(5, y + 1, progressBar(pct, 20) .. " " .. tostring(pct) .. "%")
         gpu.setForeground(C.fg)
+        y = y + 3
     end
-    
+
+    -- Диски: объём в байтах и количество типов
+    if storage then
+        local usedBytes  = tonumber(storage.usedBytes) or 0
+        local totalBytes = tonumber(storage.totalBytes)
+        local usedTypes  = tonumber(storage.usedTypes) or 0
+        local totalTypes = tonumber(storage.totalTypes)
+
+        gpu.setForeground(C.white)
+        gpu.set(5, y, "Диски (Байты):")
+
+        if totalBytes and totalBytes > 0 then
+            local pct = percentOf(usedBytes, totalBytes)
+            local color = C.ok
+            if pct >= 95 then
+                color = C.danger
+            elseif pct >= 80 then
+                color = C.admin -- жёлтый/янтарный
+            end
+            gpu.setForeground(color)
+            gpu.set(5, y + 1, progressBar(pct, 20) .. " " .. tostring(pct) .. "%  " ..
+                formatSize(usedBytes) .. " / " .. formatSize(totalBytes))
+        else
+            -- Ёмкость сети недоступна: показываем хотя бы занятое (оценка)
+            gpu.setForeground(storage.estimated and C.muted or C.ok)
+            local text = formatSize(usedBytes)
+            if storage.estimated then text = text .. " (оценка занятого)" end
+            gpu.set(5, y + 1, text)
+        end
+        y = y + 3
+
+        gpu.setForeground(C.white)
+        gpu.set(5, y, "Диски (Типы):")
+        gpu.setForeground(C.ok)
+        local typesText = tostring(usedTypes)
+        if totalTypes and totalTypes > 0 then
+            typesText = typesText .. " / " .. tostring(totalTypes)
+        end
+        gpu.set(25, y, typesText)
+        y = y + 2
+    end
+
     if info.cpus then
         gpu.setForeground(C.white)
-        gpu.set(5, 15, "Сопроцессоров:")
+        gpu.set(5, y, "Сопроцессоров:")
         gpu.setForeground(C.ok)
-        gpu.set(25, 15, tostring(info.cpus))
+        gpu.set(25, y, tostring(info.cpus))
+        y = y + 2
     end
-    
+
     gpu.setForeground(C.muted)
     gpu.set(5, H - 4, "Автообновление включено (каждые 2 сек)")
 end

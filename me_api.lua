@@ -295,6 +295,95 @@ function api.getNetworkInfo()
     return info
 end
 
+-- Суммирует показатели одной ячейки/диска в накопитель acc.
+-- Поля могут называться по-разному в зависимости от версии OC/AE, поэтому
+-- принимаем несколько вариантов имён. Возвращает true, если данные найдены.
+local function addStorageEntry(acc, cell)
+    if type(cell) ~= "table" then return false end
+
+    -- Вложенные ячейки (например, диск с массивом cells/storage)
+    local nested = cell.cells or cell.storage
+    if type(nested) == "table" then
+        local any = false
+        for _, c in pairs(nested) do
+            if addStorageEntry(acc, c) then any = true end
+        end
+        if any then return true end
+    end
+
+    local totalBytes = tonumber(cell.totalBytes or cell.totalbytes or cell.bytesTotal or cell.total)
+    local usedBytes  = tonumber(cell.usedBytes  or cell.usedbytes  or cell.bytesUsed)
+    local totalTypes = tonumber(cell.totalTypes or cell.totaltypes or cell.typesTotal)
+    local usedTypes  = tonumber(cell.usedTypes  or cell.usedtypes  or cell.typesUsed)
+
+    if not totalBytes and not usedBytes and not totalTypes and not usedTypes then
+        return false
+    end
+
+    acc.totalBytes = acc.totalBytes + (totalBytes or 0)
+    acc.usedBytes  = acc.usedBytes  + (usedBytes  or 0)
+    acc.totalTypes = acc.totalTypes + (totalTypes or 0)
+    acc.usedTypes  = acc.usedTypes  + (usedTypes  or 0)
+    return true
+end
+
+-- Информация о хранилище МЭ (ячейки/диски): объём и количество типов.
+-- В части версий OC у me_interface есть getCells()/getDrives(); если их нет,
+-- оцениваем занятое по списку предметов сети (формула AE2: 8 предметов = 1 байт,
+-- каждый тип = 8 байт). Точный общий объём без getCells() недоступен.
+function api.getStorageInfo()
+    local okMe, me = pcall(function() return component.me_interface end)
+    if not okMe or not me then return nil end
+
+    local acc = { totalBytes = 0, usedBytes = 0, totalTypes = 0, usedTypes = 0 }
+    local found = false
+
+    -- 1) Список ячеек сети (OC с интеграцией AE2, где метод реализован)
+    local okCellsFn, cellsFn = pcall(function() return me.getCells end)
+    if okCellsFn and type(cellsFn) == "function" then
+        local ok, cells = pcall(function() return me.getCells() end)
+        if ok and type(cells) == "table" then
+            for _, cell in pairs(cells) do
+                if addStorageEntry(acc, cell) then found = true end
+            end
+        end
+    end
+
+    -- 2) Альтернатива: список дисков
+    local okDrivesFn, drivesFn = pcall(function() return me.getDrives end)
+    if not found and okDrivesFn and type(drivesFn) == "function" then
+        local ok, drives = pcall(function() return me.getDrives() end)
+        if ok and type(drives) == "table" then
+            for _, drive in pairs(drives) do
+                if addStorageEntry(acc, drive) then found = true end
+            end
+        end
+    end
+
+    if found and (acc.totalBytes > 0 or acc.totalTypes > 0) then
+        return acc
+    end
+
+    -- 3) Резерв: метода нет (например, OC 1.7.10). Считаем занятое по предметам.
+    local items = api.getNetworkItems()
+    if type(items) ~= "table" or #items == 0 then return nil end
+
+    local totalItems = 0
+    for _, it in ipairs(items) do
+        totalItems = totalItems + (tonumber(it.size) or 0)
+    end
+    if totalItems <= 0 then return nil end
+
+    local usedTypes = #items
+    return {
+        totalBytes = nil,
+        usedBytes = math.ceil(totalItems / 8) + usedTypes * 8,
+        totalTypes = nil,
+        usedTypes = usedTypes,
+        estimated = true,
+    }
+end
+
 -- Статус по лимитам: массив {label, current, min, isOk}, отсортирован по имени
 function api.getThresholdStatus()
     local list = {}

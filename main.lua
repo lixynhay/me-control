@@ -38,6 +38,7 @@ local state = {
     currentTab = "ME", player = nil, currentPlayer = nil, isAdmin = false, adminList = {},
     statusMsg = "", statusErr = false,
     networkInfo = {},
+    storageInfo = nil,
     monitorStatus = {},
     lastUpdate = 0,
     alertActive = false,
@@ -130,6 +131,7 @@ local function updateList()
     elseif state.currentTab == "STATS" then
         state.items = {}
         state.networkInfo = api.getNetworkInfo()
+        state.storageInfo = api.getStorageInfo()
     elseif state.currentTab == "MON" then
         state.items = {}
         state.monitorStatus = api.getThresholdStatus()

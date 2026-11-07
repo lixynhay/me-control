@@ -1,6 +1,6 @@
 local config = {}
 
-config.version = "v1.0.0"
+config.version = "v1.1.0"
 
 -- Направления
 config.side_export = "UP"   -- От МЭ к PIM
@@ -25,5 +25,21 @@ config.alerts = {
     redstone = true,      -- Включить сигнал редстоуна
     redstoneSide = "BACK" -- Сторона, куда подключена лампа/сирена (замени на свою)
 }
+
+-- Человекочитаемый размер: байты -> B / KB / MB / GB / TB
+function config.formatSize(bytes)
+    bytes = tonumber(bytes) or 0
+    if bytes < 1024 then
+        return string.format("%d B", bytes)
+    end
+    local units = { "KB", "MB", "GB", "TB" }
+    local value = bytes
+    local i = 0
+    repeat
+        value = value / 1024
+        i = i + 1
+    until value < 1024 or i >= #units
+    return string.format("%.1f %s", value, units[i])
+end
 
 return config
