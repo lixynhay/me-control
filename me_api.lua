@@ -115,6 +115,52 @@ local function cleanError(err)
     return short or msg
 end
 
+-- Вызывает метод компонента и нормализует результат.
+--
+-- В OpenComputers метод может быть не только функцией: прокси-объект бывает
+-- таблицей с метаметодом __call. Поэтому тип НЕ проверяем, а просто пробуем
+-- вызвать: obj[name]() — для таблицы с __call это тоже валидный вызов.
+-- Если прямой вызов упал, дополнительно дёргаем __call из метатаблицы.
+--
+-- Возвращает: true, результат | false, текст ошибки
+local function callComponentMethod(obj, name)
+    if obj == nil then
+        return false, "компонент недоступен"
+    end
+
+    local okValue, value = pcall(function() return obj[name] end)
+    if not okValue then
+        return false, cleanError(value)
+    end
+    if value == nil then
+        return false, "метод отсутствует (nil)"
+    end
+    -- 1) Прямой вызов с круглыми скобками
+    local ok, result = pcall(function() return obj[name]() end)
+    if ok then
+        return true, result
+    end
+    local firstErr = cleanError(result)
+
+    -- 2) Если вызвать напрямую не получилось — проверяем __call в метатаблице
+    local okMt, mt = pcall(getmetatable, value)
+    if okMt and type(mt) == "table" and mt.__call ~= nil then
+        local ok2, result2 = pcall(function() return mt.__call(value) end)
+        if ok2 then
+            return true, result2
+        end
+        return false, cleanError(result2)
+    end
+
+    -- 3) Понятное сообщение, если объект в принципе не вызываемый
+    local vtype = type(value)
+    if vtype ~= "function" then
+        return false, vtype .. " без __call"
+    end
+
+    return false, firstErr
+end
+
 -- Список доступных крафтов (рецептов) в МЭ-сети.
 -- Каждый элемент: { label, display, name, damage, size, craftable }
 -- где craftable — исходный объект-рецепт (нужен для request()).
@@ -134,19 +180,10 @@ function api.getCraftables()
         return {}
     end
 
-    local okFn, getCraftables = pcall(function() return me.getCraftables end)
-    if not okFn then
-        _G.last_craft_error = "getCraftables (доступ): " .. cleanError(getCraftables)
-        return {}
-    end
-    if type(getCraftables) ~= "function" then
-        _G.last_craft_error = "getCraftables отсутствует (тип: " .. type(getCraftables) .. ")"
-        return {}
-    end
-
-    local okRaw, raw = pcall(function() return me.getCraftables() end)
+    -- Просто пробуем вызвать — без проверки type(...) == "function"
+    local okRaw, raw = callComponentMethod(me, "getCraftables")
     if not okRaw then
-        _G.last_craft_error = "getCraftables: " .. cleanError(raw)
+        _G.last_craft_error = "getCraftables: " .. tostring(raw)
         return {}
     end
     if type(raw) ~= "table" then

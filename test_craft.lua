@@ -16,8 +16,9 @@ local function safe(fn, ...)
     local ok, res = pcall(fn, ...)
     if ok then return true, res end
     local msg = tostring(res)
-    -- Убираем "файл:строка: " из текста ошибки
-    local short = msg:match("^.-:%d+:%s*(.+)$")
+    -- Убираем "путь:строка: " из текста ошибки
+    local short = msg:match("^.-[\\/][^\\/]-:%d+:%s*(.+)$")
+    if not short then short = msg:match("^.-:%d+:%s*(.+)$") end
     return false, short or msg
 end
 
@@ -41,25 +42,49 @@ line("")
 
 local me = component.me_interface
 
--- 2. Наличие метода getCraftables
+-- 2. Что вообще лежит в me.getCraftables (без проверки type == "function")
 local okGet, getCraftables = safe(function() return me.getCraftables end)
 if not okGet then
-    line("[FAIL] Не удалось получить me.getCraftables: " .. tostring(getCraftables))
+    line("[FAIL] Не удалось прочитать me.getCraftables: " .. tostring(getCraftables))
     return
 end
-if type(getCraftables) ~= "function" then
-    line("[FAIL] Метод me.getCraftables отсутствует (тип: " .. type(getCraftables) .. ")")
-    line("       Эта сборка OC/AE2 не поддерживает список рецептов.")
+
+line("me.getCraftables:")
+line("    type          = " .. type(getCraftables))
+
+local okMt, mt = safe(getmetatable, getCraftables)
+if not okMt then
+    line("    getmetatable  = ОШИБКА -> " .. tostring(mt))
+else
+    line("    getmetatable  = " .. tostring(mt))
+    if type(mt) == "table" then
+        line("    __call        = " .. type(mt.__call))
+        line("    __index       = " .. type(mt.__index))
+        if mt.__call ~= nil then
+            line("    Вызываемый объект (есть __call) — прямой вызов должен работать.")
+        end
+    end
+end
+
+if getCraftables == nil then
+    line("[FAIL] me.getCraftables == nil: метод отсутствует в этой сборке OC/AE2.")
+    line("       Список рецептов недоступен, крафтить через панель нельзя.")
     return
 end
-line("[OK]   Метод me.getCraftables есть (function)")
 line("")
 
--- 3. Вызов getCraftables()
+-- 3. Пробуем вызвать me.getCraftables() — именно с круглыми скобками
 line("Вызов me.getCraftables() ...")
 local okCall, craftables = safe(function() return me.getCraftables() end)
 if not okCall then
-    line("[FAIL] Ошибка вызова: " .. tostring(craftables))
+    line("[FAIL] Вызов упал с ошибкой: " .. tostring(craftables))
+    -- Подсказка, если объект не вызывается вообще
+    local okMt2, mt2 = safe(getmetatable, getCraftables)
+    if okMt2 and type(mt2) == "table" and mt2.__call then
+        line("       У объекта есть __call, но прямой вызов не сработал.")
+    elseif type(getCraftables) ~= "function" then
+        line("       Объект не является функцией и не имеет __call — вызвать нельзя.")
+    end
     return
 end
 line("[OK]   Вызов успешен")
