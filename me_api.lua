@@ -13,6 +13,42 @@ local function stripColor(text)
     return text:gsub("§.", "")
 end
 
+-- Человекочитаемая причина отказа в персональном праве
+local function denyReason(playerName, field, label)
+    local p = db.getPlayer(playerName)
+    if not p then
+        return "Нет активного пользователя (встаньте на PIM)"
+    end
+    if p.role == "banned" then
+        return "Доступ запрещён: вы забанены"
+    end
+    if p[field] == false then
+        return "Вам запрещено: " .. label
+    end
+    local cfg = db.getConfig()
+    if field == "canWithdraw" and cfg.allowUserWithdraw == false then
+        return "Вам запрещено: " .. label
+    end
+    if field == "canDeposit" and cfg.allowUserDeposit == false then
+        return "Вам запрещено: " .. label
+    end
+    if field == "canCraft" and cfg.allowUserCraft == false then
+        return "Вам запрещено: " .. label
+    end
+    return "Вам запрещено: " .. label
+end
+
+-- Проверка права с возвратом причины отказа (nil, если можно)
+local function checkPermission(playerName, field, label)
+    local allowed
+    if field == "canWithdraw" then allowed = db.canWithdraw(playerName)
+    elseif field == "canDeposit" then allowed = db.canDeposit(playerName)
+    else allowed = db.canCraft(playerName) end
+
+    if allowed then return nil end
+    return denyReason(playerName, field, label)
+end
+
 -- Убирает «сырую» обёртку ключа локализации из названия предмета:
 --   item.appliedenergistics2.ItemMaterial.CardAdvSpeed.name -> CardAdvSpeed
 --   tile.foo.bar.name                                       -> bar
@@ -307,6 +343,11 @@ end
 -- Возвращает: true, "Запрос отправлен", статус (для отслеживания прогресса)
 --          или false, "текст причины"
 function api.requestCraft(craftableObject, amount)
+    -- Персональное право: крафт
+    local playerName = getPimPlayer()
+    local denied = checkPermission(playerName, "canCraft", "заказывать крафт")
+    if denied then return false, denied end
+
     local target = craftableObject
     if type(target) == "table" and target.craftable ~= nil then
         target = target.craftable
@@ -410,6 +451,11 @@ end
 
 -- Выдать игроку из МЭ (проверка успеха по фактическому уменьшению в сети)
 function api.exportToPlayer(item, amount)
+    -- Персональное право: забор из МЭ
+    local playerName = getPimPlayer()
+    local denied = checkPermission(playerName, "canWithdraw", "забирать предметы")
+    if denied then return false, denied end
+
     local me = component.me_interface
     local realAmount = math.min(amount, item.size)
     if realAmount <= 0 then return false, "В МЭ-сети нет этого предмета" end
@@ -442,6 +488,11 @@ end
 
 -- Забрать у игрока в МЭ через pim.pushItem + проверка на выпадение в мир
 function api.pushFromPlayer(item, amount)
+    -- Персональное право: сдача в МЭ
+    local playerName = getPimPlayer()
+    local denied = checkPermission(playerName, "canDeposit", "сдавать предметы")
+    if denied then return false, denied end
+
     local pim = component.pim
     local me = component.me_interface
     local itemLabel, itemName
@@ -518,19 +569,20 @@ function api.isPlayerPresent()
     return name ~= nil and name ~= ""
 end
 
--- Проверки прав
+-- Проверки прав (учитывают и персональные флаги, и глобальные настройки)
 function api.canWithdraw(playerName)
     if not playerName then return false end
-    local player = db.getPlayer(playerName)
-    if not player or player.role == "banned" then return false end
-    return db.getConfig().allowUserWithdraw ~= false
+    return db.canWithdraw(playerName)
 end
 
 function api.canDeposit(playerName)
     if not playerName then return false end
-    local player = db.getPlayer(playerName)
-    if not player or player.role == "banned" then return false end
-    return db.getConfig().allowUserDeposit ~= false
+    return db.canDeposit(playerName)
+end
+
+function api.canCraft(playerName)
+    if not playerName then return false end
+    return db.canCraft(playerName)
 end
 
 -- Информация о крафт-процессорах: всего и занятых.
@@ -782,6 +834,11 @@ end
 
 -- Сдать весь инвентарь игрока в МЭ через pim.pushItem
 function api.depositAll()
+    -- Персональное право: сдача в МЭ
+    local playerName = getPimPlayer()
+    local denied = checkPermission(playerName, "canDeposit", "сдавать предметы")
+    if denied then return 0, denied end
+
     local pim = component.pim
     local moved = 0
     local okSize, size = pcall(function() return pim.getInventorySize() end)

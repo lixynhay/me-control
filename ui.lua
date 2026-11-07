@@ -42,7 +42,7 @@ function ui.drawButton(x, y, w, text, pressed, bg)
     gpu.setForeground(C.fg)
 end
 
-function ui.getTabs(isAdmin)
+function ui.getTabs(canModerate)
     local tabs = {
         { id = "ME",    label = " МЭ-сеть " },
         { id = "INV",   label = " Инвентарь " },
@@ -50,15 +50,15 @@ function ui.getTabs(isAdmin)
         { id = "CRAFT", label = " Крафт " },
         { id = "MON",   label = " Монитор " }
     }
-    if isAdmin then
+    if canModerate then
         table.insert(tabs, { id = "LOGS",  label = " Журнал " })
         table.insert(tabs, { id = "ADMIN", label = " Админ " })
     end
     return tabs
 end
 
-function ui.getTabLayout(W, isAdmin)
-    local tabs = ui.getTabs(isAdmin)
+function ui.getTabLayout(W, canModerate)
+    local tabs = ui.getTabs(canModerate)
     local totalW = 0
     for _, tab in ipairs(tabs) do totalW = totalW + unicode.len(tab.label) + 2 end
     totalW = totalW - 2
@@ -98,8 +98,8 @@ function ui.getBottomLayout(W)
     return L
 end
 
-function ui.drawTabs(W, currentTab, isAdmin)
-    local layout = ui.getTabLayout(W, isAdmin)
+function ui.drawTabs(W, currentTab, canModerate)
+    local layout = ui.getTabLayout(W, canModerate)
     for _, tab in ipairs(layout) do
         gpu.setBackground(currentTab == tab.id and C.tab_active or C.tab_inactive)
         -- OC GPU не умеет жирный шрифт: активная вкладка — ярко-белая, неактивные — приглушённые
@@ -134,7 +134,7 @@ function ui.drawMain(W, H, state)
     if unicode.len(who) > W - 4 then who = unicode.sub(who, 1, W - 7) .. "..." end
     gpu.set(W - unicode.len(who) - 1, 1, who)
     
-    ui.drawTabs(W, state.currentTab, state.isAdmin)
+    ui.drawTabs(W, state.currentTab, state.canModerate)
     
     -- Нижняя панель кнопок рисуется для всех вкладок (до ветвлений с return)
     local bottom = ui.getBottomLayout(W)
@@ -262,7 +262,9 @@ end
 
 -- Человекочитаемые названия ролей
 local ROLE_LABELS = {
+    guest = "Гость",
     user = "Пользователь",
+    moderator = "Модератор",
     admin = "Администратор",
     techadmin = "Тех. админ",
     banned = "Забанен",
@@ -290,6 +292,8 @@ function ui.drawAdmin(W, H, adminList)
         local role = tostring(data.role or "?")
         if name == "lixynhay" then role = "techadmin" end
         local roleColor = C.fg
+        if role == "guest" then roleColor = C.muted end
+        if role == "moderator" then roleColor = C.limit end
         if role == "admin" then roleColor = C.admin end
         if role == "techadmin" then roleColor = C.techadmin end
         if role == "banned" then roleColor = C.banned end
@@ -302,15 +306,21 @@ function ui.drawAdmin(W, H, adminList)
     gpu.set(3, H - 4, "Выберите игрока, чтобы изменить роль или выдать бан")
 end
 
--- Окно управления игроком в админке (бан / роль) — геометрия 50x15
-function ui.drawAdminBan(W, H, targetName, text, role)
+-- Окно управления игроком в админке (роль / бан / персональные права) — 58x19
+-- opts = { role = "...", text = "причина", perms = { canWithdraw=..., canDeposit=..., canCraft=... } }
+function ui.drawAdminBan(W, H, targetName, opts)
+    opts = opts or {}
+    local text = opts.text or ""
+    local role = opts.role or "user"
+    local perms = opts.perms or {}
+
     gpu.setBackground(0x000000)
     gpu.fill(1, 1, W, H, " ")
-    
-    local mw, mh = 50, 15
+
+    local mw, mh = 58, 19
     local mx = math.floor((W - mw) / 2) + 1
     local my = math.floor((H - mh) / 2) + 1
-    
+
     -- Фон окна и одна аккуратная рамка (без тени/двойных линий)
     gpu.setBackground(C.modal)
     gpu.fill(mx, my, mw, mh, " ")
@@ -321,42 +331,73 @@ function ui.drawAdminBan(W, H, targetName, text, role)
         gpu.set(mx + mw - 1, my + i, "║")
     end
     gpu.set(mx, my + mh - 1, "╚" .. string.rep("═", mw - 2) .. "╝")
-    
-    -- Заголовок (на my+1, по центру)
+
+    -- Заголовок
     gpu.setForeground(C.title)
     local title = " Игрок: " .. tostring(targetName) .. " "
     if unicode.len(title) > mw - 2 then title = unicode.sub(title, 1, mw - 5) .. "... " end
     gpu.set(mx + math.floor((mw - unicode.len(title)) / 2) + 1, my + 1, title)
-    
+
     -- Роль
     gpu.setForeground(C.white)
     gpu.set(mx + 2, my + 3, "Роль:")
     gpu.setForeground(C.ok)
-    gpu.set(mx + 10, my + 3, ui.roleLabel(role))
-    
-    -- Поле ввода причины
+    gpu.set(mx + 9, my + 3, ui.roleLabel(role))
+
+    -- Персональные права: три тумблера в одной строке
     gpu.setForeground(C.white)
-    gpu.set(mx + 2, my + 6, "Причина бана:")
-    
-    -- Тёмная плашка под текст
+    gpu.set(mx + 2, my + 5, "Права:")
+
+    local function permButton(x, y, w, label, enabled)
+        local stateText = enabled and "ВКЛ" or "ВЫКЛ"
+        local bgColor = enabled and C.ok or C.disabled
+        ui.drawButton(x, y, w, label .. ":" .. stateText, false, bgColor)
+    end
+
+    permButton(mx + 2,  my + 6, 18, "ЗАБОР", perms.canWithdraw ~= false)
+    permButton(mx + 21, my + 6, 18, "СДАЧА", perms.canDeposit ~= false)
+    permButton(mx + 40, my + 6, 16, "КРАФТ", perms.canCraft ~= false)
+
+    -- Поле ввода причины бана
+    gpu.setForeground(C.white)
+    gpu.set(mx + 2, my + 9, "Причина бана:")
+
     gpu.setBackground(0x111111)
-    gpu.fill(mx + 2, my + 7, mw - 4, 1, " ")
-    
+    gpu.fill(mx + 2, my + 10, mw - 4, 1, " ")
+
     gpu.setForeground(C.ok)
     local displayText = tostring(text or "") .. "_"
     if unicode.len(displayText) > mw - 5 then
         displayText = unicode.sub(displayText, unicode.len(displayText) - (mw - 6), unicode.len(displayText))
     end
-    gpu.set(mx + 3, my + 7, displayText)
-    
-    -- Кнопки (на my + mh - 3 = my + 12)
-    local btnY = my + mh - 3
+    gpu.set(mx + 3, my + 10, displayText)
+
+    -- Кнопки внизу
+    local btnY = my + mh - 2
     gpu.setBackground(C.bg)
-    ui.drawButton(mx + 2, btnY, 16, "ЗАБАНИТЬ", false, C.danger)
-    ui.drawButton(mx + 20, btnY, 10, "РОЛЬ", false, C.limit)
-    ui.drawButton(mx + 32, btnY, 16, "ЗАКРЫТЬ", false, C.disabled)
+    ui.drawButton(mx + 2,  btnY, 16, "ЗАБАНИТЬ", false, C.danger)
+    ui.drawButton(mx + 20, btnY, 12, "РОЛЬ", false, C.limit)
+    ui.drawButton(mx + 33, btnY, 11, "РАЗБАН", false, C.warning)
+    ui.drawButton(mx + mw - 12, btnY, 10, "ЗАКРЫТЬ", false, C.disabled)
     gpu.setBackground(C.bg)
     gpu.setForeground(C.fg)
+end
+
+-- Геометрия кнопок окна игрока (общая для отрисовки и обработки кликов)
+function ui.getAdminBanLayout(W, H)
+    local mw, mh = 58, 19
+    local mx = math.floor((W - mw) / 2) + 1
+    local my = math.floor((H - mh) / 2) + 1
+    return {
+        mx = mx, my = my, mw = mw, mh = mh,
+        withdraw = { x = mx + 2,  y = my + 6, w = 18 },
+        deposit  = { x = mx + 21, y = my + 6, w = 18 },
+        craft    = { x = mx + 40, y = my + 6, w = 16 },
+        ban      = { x = mx + 2,      y = my + mh - 2, w = 16 },
+        role     = { x = mx + 20,     y = my + mh - 2, w = 12 },
+        unban    = { x = mx + 33,     y = my + mh - 2, w = 11 },
+        close    = { x = mx + mw - 12, y = my + mh - 2, w = 10 },
+    }
 end
 
 function ui.drawMonitor(W, H, statusList)
