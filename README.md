@@ -26,6 +26,7 @@
    wget https://raw.githubusercontent.com/lixynhay/me-control/main/db.lua
    wget https://raw.githubusercontent.com/lixynhay/me-control/main/config.lua
    wget https://raw.githubusercontent.com/lixynhay/me-control/main/test_craft.lua
+   wget https://raw.githubusercontent.com/lixynhay/me-control/main/version.txt
    ```
 3. Запустите:
    ```bash
@@ -98,6 +99,26 @@ test_craft.lua
 
 Причина последней неудачи также сохраняется в `_G.last_craft_error`
 и выводится в статус-бар панели: `Крафты не найдены. Ошибка: …`.
+
+## 🔄 Обновление
+
+Файл `version.txt` хранит текущую версию. `getcode.lua` читает его до скачивания
+и после — и печатает результат:
+
+```
+=== ГОТОВО ===
+Успешно: 8 | Ошибок: 0
+Общий размер: 342.1 KB
+Время выполнения: 12.44 сек.
+ОБНОВЛЕНИЕ: v1.4.1 -> v1.4.2
+Все файлы обновлены до последней версии!
+Запускайте: main.lua
+```
+
+Возможные варианты последней строки:
+* `Текущая версия актуальна: v1.4.2` — версии совпали;
+* `Установлена версия: v1.4.2` — первая установка (файла не было);
+* `ОБНОВЛЕНИЕ: v1.4.1 -> v1.4.2` — версия изменилась.
 
 ## 📜 Лицензия
 MIT
