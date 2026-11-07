@@ -82,8 +82,8 @@ end
 updateList(); drawScreen()
 
 while true do
-    -- Ловим прерывание (Ctrl+C), чтобы скрипт можно было остановить
-    local eventName, p1, p2, p3 = event.pull(0.05, "touch", "player_on", "player_off", "interrupted")
+    -- Ловим все события; фильтрация выполняется ниже по eventName
+    local eventName, p1, p2, p3 = event.pull(0.1)
     if eventName == "interrupted" then os.exit() end
     
     -- Автообновление статистики и монитора раз в 2 секунды
