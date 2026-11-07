@@ -1,97 +1,6 @@
 # Missing Russian item names (English) grouped by mod namespace
 # Format: <namespace>\t<English name>
 
-## bugtorch
-bugtorch	Dirt
-bugtorch	Sand
-bugtorch	Stone Slab
-bugtorch	Wood Slab
-
-## chisel
-chisel	End Stone
-chisel	Purpur Block
-chisel	Stained Glass
-chisel	Technical Block
-
-## enderio
-enderio	Alloy
-enderio	Alloy Block
-enderio	Big Item Filter
-enderio	Buffer
-enderio	Capacitor
-enderio	Capacitor Bank
-enderio	Conduit Facade
-enderio	Dark Steel Anvil
-enderio	Energy Conduit
-enderio	Fluid Conduit
-enderio	Grinding Ball
-enderio	Item Conduit
-enderio	Item Filter
-enderio	Light Node
-enderio	Limited Item Filter
-enderio	Machine Parts
-enderio	Materials
-enderio	ME Conduit
-enderio	Network Conduit (OC)
-enderio	Painted Slab
-enderio	Powder
-enderio	Powered Light
-enderio	Redstone Conduit
-enderio	Remote Awareness Upgrade
-enderio	Staff of Teleportation
-enderio	Zombie Electrode
-
-## etfuturum
-etfuturum	Black Bed
-etfuturum	Blue Bed
-etfuturum	Brown Bed
-etfuturum	Cartography Table
-etfuturum	Composter
-etfuturum	Copper to Iron Shulker Box Upgrade
-etfuturum	Copper to Silver Shulker Box Upgrade
-etfuturum	Cyan Bed
-etfuturum	Diamond to Crystal Shulker Box Upgrade
-etfuturum	Diamond to Obsidian Shulker Box Upgrade
-etfuturum	Fletching Table
-etfuturum	Gold to Diamond Shulker Box Upgrade
-etfuturum	Gray Bed
-etfuturum	Green Bed
-etfuturum	Grindstone
-etfuturum	Iron to Gold Shulker Box Upgrade
-etfuturum	Lectern
-etfuturum	Light Blue Bed
-etfuturum	Light Gray Bed
-etfuturum	Lime Bed
-etfuturum	Loom
-etfuturum	Magenta Bed
-etfuturum	Orange Bed
-etfuturum	Pink Bed
-etfuturum	Purple Bed
-etfuturum	Red Bed
-etfuturum	Silver to Gold Shulker Box Upgrade
-etfuturum	Smithing Table
-etfuturum	Stonecutter
-etfuturum	Vanilla to Copper Shulker Box Upgrade
-etfuturum	Vanilla to Iron Shulker Box Upgrade
-etfuturum	White Bed
-etfuturum	Yellow Bed
-
-## hodgepodge
-hodgepodge	Carpet
-hodgepodge	Dirt
-hodgepodge	Dye
-hodgepodge	Fish
-hodgepodge	Flower
-hodgepodge	Large Plant
-hodgepodge	Quartz Block
-hodgepodge	Sand
-hodgepodge	Sapling
-hodgepodge	Skull
-hodgepodge	Slab
-hodgepodge	Stained Clay
-hodgepodge	Stone Monster Egg
-hodgepodge	Wall
-
 ## metablocks
 metablocks	§1Драгоценный кластер сапфира
 metablocks	§1Драгоценный кластер циркония
@@ -1287,10 +1196,6 @@ metablocks	Ящик с шарами
 metablocks	Ящик свеклы
 metablocks	Ящик чилли
 
-## metadrive
-metadrive	Upgrade "Discount"
-metadrive	Upgrade "Multiplier"
-
 ## metawarputils
 metawarputils	§6Онлайн картинка
 metawarputils	§aАнимированная онлайн картина
@@ -1302,42 +1207,6 @@ metawarputils	§eНевидимый источник света
 metawarputils	Валюта
 metawarputils	Очки виртуальной реальности
 
-## projectred
-projectred	Athame
-projectred	Auto Crafting Bench
-projectred	Battery
-projectred	Battery Box
-projectred	Block of Copper
-projectred	Block of Electrotine
-projectred	Block of Silver
-projectred	Block of Tin
-projectred	Charging Bench
-projectred	Electric Screwdriver
-projectred	Electrotine Generator
-projectred	Filtered Importer
-projectred	Fire Starter
-projectred	Frame Linear Actuator
-projectred	Frame Motor
-projectred	Glowing Silicon Compound
-projectred	IC Gate
-projectred	Inductive Furnace
-projectred	Infused Ender Pearl
-projectred	Item Crafting Extension chip
-projectred	Jetpack
-projectred	Network Latency pipe
-projectred	Network Valve pipe
-projectred	Null-Logic Routing Chip
-projectred	Null-Logic Upgrade Chip
-projectred	Project Bench
-projectred	Recipe Plan
-projectred	Red Iron Compound
-projectred	Red Silicon Compound
-projectred	Sail
-projectred	Sandy Coal Compound
-projectred	Solar Panel
-projectred	Teleposer
-projectred	Woven Cloth
-
 ## sky_drive
 sky_drive	§dЭфир реальности
 sky_drive	§dЭфирное масло
@@ -1345,81 +1214,6 @@ sky_drive	Кодированный зеркальный шаблон
 sky_drive	МЭ зеркальный терминал создания
 sky_drive	МЭ зеркальный терминал шаблонов
 sky_drive	Пустой зеркальный шаблон
-
-## uiesingularities
-uiesingularities	Aluminum Brass Singularity
-uiesingularities	Aluminum Singularity
-uiesingularities	Alumite Singularity
-uiesingularities	Amordrine Singularity
-uiesingularities	Angmallen Singularity
-uiesingularities	Ardite Singularity
-uiesingularities	Awakened Draconium Singularity
-uiesingularities	Bitumen Singularity
-uiesingularities	Black Steel Singularity
-uiesingularities	Blue Gem Singularity
-uiesingularities	Blutonium Singularity
-uiesingularities	Brass Singularity
-uiesingularities	Bronze Singularity
-uiesingularities	Carbon Singularity
-uiesingularities	Celenegil Singularity
-uiesingularities	Charcoal Singularity
-uiesingularities	Coal Singularity
-uiesingularities	Cobalt Singularity
-uiesingularities	Compressed Iron Singularity
-uiesingularities	Conductive Iron Singularity
-uiesingularities	Crystal Singularity
-uiesingularities	Cyanite Singularity
-uiesingularities	Damascus Steel Singularity
-uiesingularities	Dark Steel Singularity
-uiesingularities	Desichalkos Singularity
-uiesingularities	Diamond Singularity
-uiesingularities	Draconium Singularity
-uiesingularities	Electrical Steel Singularity
-uiesingularities	Electrotine Singularity
-uiesingularities	Electrum Singularity
-uiesingularities	Emerald Singularity
-uiesingularities	Ender Singularity
-uiesingularities	Energetic Alloy Singularity
-uiesingularities	Fairy Singularity
-uiesingularities	Flux Crystal Singularity
-uiesingularities	Fluxed Electrum Singularity
-uiesingularities	Glue Singularity
-uiesingularities	Graphite Singularity
-uiesingularities	Haderoth Singularity
-uiesingularities	Hepatizon Singularity
-uiesingularities	Inolashite Singularity
-uiesingularities	Invar Singularity
-uiesingularities	Ludicrite Singularity
-uiesingularities	Magnesium Singularity
-uiesingularities	Manyullyn Singularity
-uiesingularities	Osmium Singularity
-uiesingularities	Palladium Singularity
-uiesingularities	Peridot Singularity
-uiesingularities	Phosphorus Singularity
-uiesingularities	Pokefennium Singularity
-uiesingularities	Potash Singularity
-uiesingularities	Pulsating Iron Singularity
-uiesingularities	Quicksilver Singularity
-uiesingularities	Red Gem Singularity
-uiesingularities	Redstone Alloy Singularity
-uiesingularities	Refined Glowstone Singularity
-uiesingularities	Refined Obsidian Singularity
-uiesingularities	Ruby Singularity
-uiesingularities	Saltpeter Singularity
-uiesingularities	Sapphire Singularity
-uiesingularities	Shadow Steel Singularity
-uiesingularities	Soularium Singularity
-uiesingularities	Steel Singularity
-uiesingularities	Sulfur Singularity
-uiesingularities	Tartarite Singularity
-uiesingularities	Titanium Singularity
-uiesingularities	Tungsten Singularity
-uiesingularities	Unstable Ingot Singularity
-uiesingularities	Uranium Singularity
-uiesingularities	Vibrant Alloy Singularity
-uiesingularities	White Gem Singularity
-uiesingularities	Yellorium Singularity
-uiesingularities	Zinc Singularity
 
 ## ztones
 ztones	Agon ⓪

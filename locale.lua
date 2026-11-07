@@ -330,6 +330,15 @@ locale.manualByLabel = {
     ["White Gem Singularity"] = "Сингулярность белого самоцвета",
     ["Yellorium Singularity"] = "Йеллориумовая сингулярность",
     ["Zinc Singularity"] = "Цинковая сингулярность",
+
+    -- ===== hodgepodge =====
+    ["Dye"] = "Краситель",
+    ["Fish"] = "Рыба",
+    ["Flower"] = "Цветок",
+    ["Large Plant"] = "Большое растение",
+    ["Quartz Block"] = "Кварцевый блок",
+    ["Slab"] = "Плита",
+    ["Stained Clay"] = "Цветная глина",
 }
 for k, v in pairs(locale.manualByLabel) do locale.byLabel[k] = v end
 
