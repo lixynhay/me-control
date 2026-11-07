@@ -305,14 +305,14 @@ end
 
 -- Отправить запрос на крафт. Принимает либо объект-рецепт, либо элемент списка.
 -- Возвращает: true, "Запрос отправлен", статус (для отслеживания прогресса)
---          или false, "Ошибка: ..."
+--          или false, "текст причины"
 function api.requestCraft(craftableObject, amount)
     local target = craftableObject
     if type(target) == "table" and target.craftable ~= nil then
         target = target.craftable
     end
     if target == nil then
-        return false, "Ошибка: рецепт недоступен"
+        return false, "Рецепт недоступен"
     end
 
     amount = math.floor(tonumber(amount) or 1)
@@ -320,19 +320,19 @@ function api.requestCraft(craftableObject, amount)
 
     local ok, result = pcall(function() return target.request(amount) end)
     if not ok then
-        return false, "Ошибка: " .. cleanError(result)
+        return false, cleanError(result)
     end
     if result == nil then
-        return false, "Ошибка: МЭ не вернула статус крафта (nil)"
+        return false, "МЭ-сеть не вернула статус крафта"
     end
     if result == false then
-        return false, "Ошибка: МЭ отклонила запрос на крафт"
+        return false, "МЭ-сеть отклонила запрос на крафт"
     end
 
     -- Пробуем сразу понять состояние: если запрос успел провалиться — сообщаем
     local st = api.getCraftStatus(result)
     if st and st.failed == true then
-        return false, "Ошибка: крафт сразу провален (нет ресурсов или занят CPU)"
+        return false, "Крафт сразу провален: нет ресурсов или занят CPU"
     end
 
     return true, "Запрос отправлен", result
@@ -412,7 +412,7 @@ end
 function api.exportToPlayer(item, amount)
     local me = component.me_interface
     local realAmount = math.min(amount, item.size)
-    if realAmount <= 0 then return false, "В МЭ нет предметов" end
+    if realAmount <= 0 then return false, "В МЭ-сети нет этого предмета" end
     
     local itemDamage = item.damage or 0
     local countBefore = getNetworkCountByStack(item.name, itemDamage)
@@ -437,7 +437,7 @@ function api.exportToPlayer(item, amount)
         db.addLog(getPimPlayer(), "take", item.display or item.label, actuallyExported)
         return true, "Выдано: " .. actuallyExported .. " шт."
     end
-    return false, "МЭ отказала в выдаче (0 шт.)"
+    return false, "МЭ-сеть отклонила выдачу (0 шт.)"
 end
 
 -- Забрать у игрока в МЭ через pim.pushItem + проверка на выпадение в мир
@@ -480,7 +480,7 @@ function api.pushFromPlayer(item, amount)
     end
 
     if moved == 0 then
-        return false, "Предмет не найден или МЭ не приняла его"
+        return false, "Предмет не найден, либо МЭ-сеть его не приняла"
     end
 
     -- Даём МЭ время обработать и сверяем количество
@@ -496,10 +496,10 @@ function api.pushFromPlayer(item, amount)
             if fp then
                 local eOk, exported = pcall(function() return me.exportItem(fp, config.side_export, lost, 0) end)
                 if eOk and tonumber(exported) and tonumber(exported) > 0 then
-                    return false, "Предмет возвращен в инвентарь (МЭ не приняла его)"
+                    return false, "Предмет возвращён в инвентарь: МЭ-сеть его не приняла"
                 end
             end
-            return false, "ВНИМАНИЕ: Предмет не попал в МЭ-сеть! Он остался в ME Interface. Заберите его оттуда вручную."
+            return false, "Предмет не попал в МЭ-сеть: он остался в ME Interface — заберите его вручную"
         end
     end
 
@@ -507,7 +507,7 @@ function api.pushFromPlayer(item, amount)
     if moved >= amount then
         return true, "Сдано: " .. moved .. " шт."
     end
-    return false, "МЭ приняла только " .. moved .. " из " .. amount .. " шт. Остальное осталось в инвентаре"
+    return false, "МЭ-сеть приняла только " .. moved .. " из " .. amount .. " шт.; остальное осталось в инвентаре"
 end
 
 -- Проверка наличия игрока
@@ -823,7 +823,7 @@ function api.depositAll()
     os.sleep(0.5)
     local totalAfter = getTotalNetworkCount()
     if totalBefore ~= nil and totalAfter ~= nil and (totalAfter - totalBefore) < moved then
-        return moved, "ВНИМАНИЕ: Некоторые предметы не попали в сеть! Заберите их из ME Interface вручную."
+        return moved, "Некоторые предметы не попали в МЭ-сеть — заберите их из ME Interface вручную"
     end
     return moved, "Сдано всё: " .. moved .. " шт."
 end

@@ -36,7 +36,7 @@ local H = (okRes and tonumber(resH)) or 25
 local state = {
     items = {}, page = 1, totalPages = 1, selectedItem = nil, quantity = 1,
     currentTab = "ME", player = nil, currentPlayer = nil, isAdmin = false, adminList = {},
-    statusMsg = "", statusErr = false,
+    statusMsg = "", statusErr = false, statusLevel = "ok",
     networkInfo = {},
     storageInfo = nil,
     energyHistory = {},
@@ -64,21 +64,52 @@ local state = {
     banReasonText = "",
     logSearchQuery = "",
     isLogSearching = false,
+    logFilter = "all",
+    logClearArmed = false,
+    logClearTime = 0,
     originalLogs = {}
 }
 
-local function setStatus(msg, isError)
+-- ===== Статус-бар =====
+-- Уровни сообщений: "ok" (по умолчанию), "err", "warn", "info".
+-- Для ok/err/warn автоматически подставляется префикс, чтобы все сообщения
+-- были в едином стиле: [OK] / [ОШИБКА] / [ВНИМАНИЕ].
+local STATUS_PREFIX = { ok = "[OK] ", err = "[ОШИБКА] ", warn = "[ВНИМАНИЕ] " }
+local STATUS_COLOR  = { ok = config.colors.ok, err = config.colors.err,
+                        warn = config.colors.admin, info = config.colors.title }
+
+local function normalizeLevel(level)
+    -- Совместимость: раньше вторым аргументом был boolean isError
+    if level == true then return "err" end
+    if level == false or level == nil then return "ok" end
+    if level == "error" then return "err" end
+    if level == "warning" then return "warn" end
+    if STATUS_PREFIX[level] or level == "info" then return level end
+    return "ok"
+end
+
+local function setStatus(msg, level)
+    local lvl = normalizeLevel(level)
     msg = tostring(msg or "")
+
+    local prefix = STATUS_PREFIX[lvl]
+    if prefix and not msg:find("^%[") then
+        msg = prefix .. msg
+    end
+
     -- Обрезаем длинные сообщения, чтобы не вылезали за экран
     if unicode.len(msg) > W - 5 then
         msg = unicode.sub(msg, 1, W - 8) .. "..."
     end
+
     state.statusMsg = msg
-    state.statusErr = isError
+    state.statusLevel = lvl
+    state.statusErr = (lvl == "err")
+
     -- Мгновенная отрисовка статуса (если drawScreen не будет вызван сразу)
     gpu.setBackground(config.colors.bg)
     gpu.fill(1, H - 1, W, 1, " ")
-    gpu.setForeground(isError and config.colors.err or config.colors.ok)
+    gpu.setForeground(STATUS_COLOR[lvl] or config.colors.ok)
     gpu.set(3, H - 1, msg)
 end
 
@@ -110,25 +141,33 @@ local function applySearchFilter()
     if state.page > state.totalPages then state.page = state.totalPages end
 end
 
--- Фильтр логов по player/item/action (без учёта регистра)
+-- Фильтр журнала: по типу операции (все / взяли / сдали) и по поисковой строке
 local function applyLogSearchFilter()
-    if state.logSearchQuery == "" then
-        state.logs = state.originalLogs
-    else
-        local q = unicode.lower(state.logSearchQuery)
-        local filtered = {}
-        for _, e in ipairs(state.originalLogs) do
-            local p = unicode.lower(tostring(e.player or ""))
-            local it = unicode.lower(tostring(e.item or ""))
-            local a = unicode.lower(tostring(e.action or ""))
-            if p:find(q, 1, true) or it:find(q, 1, true) or a:find(q, 1, true) then
-                table.insert(filtered, e)
+    local q = unicode.lower(state.logSearchQuery or "")
+    local filter = state.logFilter or "all"
+    local filtered = {}
+
+    for _, e in ipairs(state.originalLogs) do
+        local action = tostring(e.action or "")
+        local matchType = (filter == "all") or (action == filter)
+        if matchType then
+            if q == "" then
+                filtered[#filtered + 1] = e
+            else
+                local p = unicode.lower(tostring(e.player or ""))
+                local it = unicode.lower(tostring(e.item or ""))
+                local a = unicode.lower(action)
+                if p:find(q, 1, true) or it:find(q, 1, true) or a:find(q, 1, true) then
+                    filtered[#filtered + 1] = e
+                end
             end
         end
-        state.logs = filtered
     end
-    state.logsTotalPages = math.max(1, math.ceil(#state.logs / (H - 10)))
+
+    state.logs = filtered
+    state.logsTotalPages = math.max(1, math.ceil(#state.logs / math.max(1, H - 12)))
     if state.logsPage > state.logsTotalPages then state.logsPage = state.logsTotalPages end
+    if state.logsPage < 1 then state.logsPage = 1 end
 end
 
 local function updateList()
@@ -167,7 +206,7 @@ local function updateList()
             if not errText or errText == "" then
                 errText = "рецепты не найдены (МЭ пуста или нет шаблонов)"
             end
-            setStatus("Крафты не найдены. Ошибка: " .. tostring(errText), true)
+            setStatus("Крафты не найдены: " .. tostring(errText), "err")
         end
     elseif state.currentTab == "MON" then
         state.items = {}
@@ -206,7 +245,8 @@ local function drawScreen()
     -- После отрисовки основного экрана принудительно рисуем статус, чтобы он не исчез
     gpu.setBackground(config.colors.bg)
     gpu.fill(1, H - 1, W, 1, " ")
-    gpu.setForeground(state.statusErr and config.colors.err or config.colors.ok)
+    local lvl = state.statusLevel or (state.statusErr and "err" or "ok")
+    gpu.setForeground(STATUS_COLOR[lvl] or config.colors.ok)
     gpu.set(3, H - 1, state.statusMsg)
 end
 
@@ -222,6 +262,7 @@ local function switchTab(tabId)
     state.banReasonText = ""
     state.isSearching = false
     state.isLogSearching = false
+    state.logClearArmed = false
     updateList(); drawScreen()
     return true
 end
@@ -247,7 +288,8 @@ if initialPlayer and initialPlayer ~= "" then
 end
 
 -- Подсказка о горячих клавишах при запуске
-state.statusMsg = "Подсказка: F1-F6 — вкладки, / — поиск."
+state.statusMsg = "F1–F6 — вкладки, / — поиск, 1/2/3 — фильтр журнала"
+state.statusLevel = "info"
 state.statusErr = false
 
 updateList(); drawScreen()
@@ -281,17 +323,17 @@ while true do
         local st = api.getCraftStatus(state.lastCraftStatus)
         if st then
             if st.failed == true then
-                setStatus("Крафт провален (возможно, не хватает ресурсов или CPU занят)", true)
+                setStatus("Крафт провален: не хватает ресурсов или занят CPU", "err")
                 state.lastCraftStatus = nil
             elseif st.done == true then
-                setStatus("Крафт завершен!")
+                setStatus("Крафт завершён")
                 state.lastCraftStatus = nil
                 -- Обновляем список/статистику, чтобы показать новые предметы
                 if state.currentTab == "CRAFT" or state.currentTab == "ME" then
                     updateList(); drawScreen()
                 end
             elseif st.canceled == true then
-                setStatus("Крафт отменен", true)
+                setStatus("Крафт отменён", "warn")
                 state.lastCraftStatus = nil
             end
         else
@@ -310,7 +352,7 @@ while true do
                 db.unbanPlayer(state.player)
                 state.isBanned = false
                 state.banInfo = nil
-                setStatus("Бан истёк, доступ восстановлен")
+                setStatus("Срок бана истёк, доступ восстановлен")
                 updateList(); drawScreen()
             end
         end
@@ -370,7 +412,7 @@ while true do
             state.isBanned = true
             state.banInfo = banInfo
             state.selectedItem = nil
-            setStatus("Доступ запрещён", true)
+            setStatus("Доступ запрещён: вы забанены", "err")
             drawScreen()
         else
             state.isBanned = false
@@ -378,7 +420,7 @@ while true do
             if state.isTechAdmin then
                 setStatus("Вы вошли как Технический Администратор")
             elseif state.isAdmin then
-                setStatus("Вы вошли как Админ.")
+                setStatus("Вы вошли как администратор")
             end
             state.currentTab = "ME"
             updateList(); drawScreen()
@@ -397,7 +439,7 @@ while true do
         state.currentTab = "ME"
         state.selectedItem = nil -- ИСПРАВЛЕНИЕ 4: Закрываем открытую карточку при уходе
         state.page = 1
-        setStatus("Игрок ушел с PIM.", true)
+        setStatus("Пользователь покинул PIM", "warn")
         updateList(); drawScreen()
         
     elseif eventName == "key_down" then
@@ -424,7 +466,7 @@ while true do
             -- F1–F6: переключение вкладок (работает в любом режиме)
             local needsAdmin = (hotkeyTab == "LOGS" or hotkeyTab == "ADMIN")
             if needsAdmin and not state.isAdmin then
-                setStatus("Вкладка доступна только администратору", true)
+                setStatus("Недостаточно прав: раздел доступен администратору", "err")
             else
                 switchTab(hotkeyTab)
             end
@@ -440,7 +482,20 @@ while true do
                 state.searchQuery = ""
                 applySearchFilter(); drawScreen()
             else
-                setStatus("Поиск доступен на вкладках МЭ-сеть, Инвентарь и Логи", true)
+                setStatus("Поиск доступен на вкладках: МЭ-сеть, Инвентарь, Журнал", "warn")
+            end
+
+        elseif (keyCode == 2 or keyCode == 3 or keyCode == 4) and not typingText
+               and state.currentTab == "LOGS" then
+            -- 1 / 2 / 3 — фильтр журнала: все / взяли / сдали
+            local map = { [2] = "all", [3] = "take", [4] = "put" }
+            local names = { all = "все операции", take = "только выдача", put = "только сдача" }
+            local newFilter = map[keyCode]
+            if newFilter and newFilter ~= state.logFilter then
+                state.logFilter = newFilter
+                state.logsPage = 1
+                applyLogSearchFilter(); drawScreen()
+                setStatus("Фильтр журнала: " .. (names[newFilter] or newFilter))
             end
 
         elseif state.adminTarget and state.currentTab == "ADMIN" then
@@ -451,9 +506,9 @@ while true do
                 if reason == "" then reason = "Без причины" end
                 local okB, bErr = db.banPlayer(state.player, state.adminTarget, reason, 0)
                 if okB then
-                    setStatus("Игрок " .. state.adminTarget .. " забанен навсегда")
+                    setStatus("Игрок " .. state.adminTarget .. " забанен")
                 else
-                    setStatus(tostring(bErr or "Не удалось забанить"), true)
+                    setStatus(tostring(bErr or "Не удалось забанить игрока"), "err")
                 end
                 state.adminTarget = nil
                 state.banReasonText = ""
@@ -541,9 +596,9 @@ while true do
         -- Кнопка «ВЫХОД» — только для админа (доступна даже без игрока на PIM)
         if y == H - 2 and x >= W - 20 and x < W - 5 then
             if not state.isAdmin then
-                setStatus("Только админ может выключить панель", true)
+                setStatus("Недостаточно прав: выключение доступно администратору", "err")
             else
-                setStatus("Выход...", true); os.sleep(0.5); break
+                setStatus("Завершение работы панели…", "info"); os.sleep(0.5); break
             end
         end
         
@@ -551,9 +606,9 @@ while true do
         if state.isBanned then
             -- ничего не делаем
         elseif state.currentPlayer == nil then
-            setStatus("Встаньте на PIM для использования панели!", true)
+            setStatus("Нет активного пользователя (встаньте на PIM)", "err")
         elseif clickPlayer ~= state.currentPlayer then
-            setStatus("Панель занята игроком " .. tostring(state.currentPlayer), true)
+            setStatus("Панель занята игроком " .. tostring(state.currentPlayer), "warn")
         else
             -- Любой клик выходит из режима поиска (кнопки ПОИСК ниже включат его снова)
             state.isSearching = false
@@ -575,6 +630,36 @@ while true do
                 switchTab(newTab)
             end
             
+        elseif not state.selectedItem and state.currentTab == "LOGS" and y == 4
+               and state.isAdmin and x >= 3 and x < 15 then
+            -- «ОЧИСТИТЬ»: первое нажатие взводит, второе (в течение 3 сек) очищает
+            local now = computer.uptime()
+            if state.logClearArmed and (now - (state.logClearTime or 0)) <= 3 then
+                db.clearLogs()
+                state.logClearArmed = false
+                state.logsPage = 1
+                updateList(); drawScreen()
+                setStatus("Журнал операций очищен")
+            else
+                state.logClearArmed = true
+                state.logClearTime = now
+                drawScreen()
+                setStatus("Нажмите «ТОЧНО?» ещё раз, чтобы очистить журнал", "warn")
+            end
+
+        elseif not state.selectedItem and state.currentTab == "LOGS" and y == 5 then
+            -- Кнопки фильтра по типу операции
+            for _, f in ipairs(ui.getLogFilterLayout(W)) do
+                if x >= f.x and x < f.x + f.w then
+                    if state.logFilter ~= f.id then
+                        state.logFilter = f.id
+                        state.logsPage = 1
+                        applyLogSearchFilter(); drawScreen()
+                    end
+                    break
+                end
+            end
+
         elseif not state.selectedItem and y == 4
                and (state.currentTab == "ME" or state.currentTab == "INV") then
             -- Клик по заголовку списка — переключение режима сортировки
@@ -600,7 +685,7 @@ while true do
                     if state.craftPage > 1 then state.craftPage = state.craftPage - 1; drawScreen() end
                 elseif state.page > 1 then state.page = state.page - 1; drawScreen() end
             end
-            if x >= bottom.refresh.x and x < bottom.refresh.x + bottom.refresh.w then state.lastUpdate = 0; updateList(); drawScreen(); setStatus("Обновлено.") end
+            if x >= bottom.refresh.x and x < bottom.refresh.x + bottom.refresh.w then state.lastUpdate = 0; updateList(); drawScreen(); setStatus("Данные обновлены") end
             if x >= bottom.next.x and x < bottom.next.x + bottom.next.w then
                 if state.currentTab == "LOGS" then
                     if state.logsPage < state.logsTotalPages then state.logsPage = state.logsPage + 1; drawScreen() end
@@ -621,13 +706,14 @@ while true do
             end
             if state.currentTab == "INV" and bottom.deposit and x >= bottom.deposit.x and x < bottom.deposit.x + bottom.deposit.w then
                 if not api.isPlayerPresent() then
-                    setStatus("Встаньте на PIM для сдачи!", true)
+                    setStatus("Нет активного пользователя (встаньте на PIM)", "err")
                 elseif not api.canDeposit(state.player) then
-                    setStatus("Вам запрещено сдавать предметы!", true)
+                    setStatus("Доступ запрещён: недостаточно прав", "err")
                 else
                     local moved, msg = api.depositAll()
                     updateList(); drawScreen()
-                    setStatus(msg, moved == 0 or (msg and msg:find("ВНИМАНИЕ", 1, true) ~= nil))
+                    local isWarn = (moved == 0) or (msg and msg:find("ВНИМАНИЕ", 1, true) ~= nil)
+                    setStatus(msg, isWarn and "warn" or "ok")
                 end
             end
             -- «ВЫХОД» обработан выше (только для админа)
@@ -644,9 +730,9 @@ while true do
                         if reason == "" then reason = "Без причины" end
                         local okB, bErr = db.banPlayer(state.player, state.adminTarget, reason, 0)
                         if okB then
-                            setStatus("Игрок " .. state.adminTarget .. " забанен навсегда")
+                            setStatus("Игрок " .. state.adminTarget .. " забанен")
                         else
-                            setStatus(tostring(bErr or "Не удалось забанить"), true)
+                            setStatus(tostring(bErr or "Не удалось забанить игрока"), "err")
                         end
                         state.adminTarget = nil
                         state.banReasonText = ""
@@ -666,9 +752,9 @@ while true do
                                 okR, rErr = db.setRole(state.player, state.adminTarget, newRole)
                             end
                             if okR then
-                                setStatus("Роль " .. state.adminTarget .. " -> " .. newRole)
+                                setStatus("Роль игрока " .. state.adminTarget .. ": " .. newRole)
                             else
-                                setStatus(tostring(rErr or "Не удалось изменить роль"), true)
+                                setStatus(tostring(rErr or "Не удалось изменить роль"), "err")
                             end
                         end
                         updateList(); drawScreen()
@@ -726,17 +812,17 @@ while true do
                             .. " x" .. tostring(state.quantity))
                     else
                         state.lastCraftStatus = nil
-                        setStatus("Не удалось запросить крафт: " .. tostring(res), true)
+                        setStatus("Не удалось запросить крафт: " .. tostring(res), "err")
                     end
                     state.selectedItem = nil
                     updateList(); drawScreen()
                 else
                     if not state.player then
-                        setStatus("Ошибка: на PIM никого нет!", true)
+                        setStatus("Нет активного пользователя (встаньте на PIM)", "err")
                     elseif state.currentTab == "ME" and not api.canWithdraw(state.player) then
-                        setStatus("Вам запрещено забирать предметы!", true)
+                        setStatus("Доступ запрещён: недостаточно прав", "err")
                     elseif state.currentTab == "INV" and not api.canDeposit(state.player) then
-                        setStatus("Вам запрещено сдавать предметы!", true)
+                        setStatus("Доступ запрещён: недостаточно прав", "err")
                     else
                         local ok, msg
                         if state.currentTab == "ME" then
@@ -744,7 +830,7 @@ while true do
                         else
                             ok, msg = api.pushFromPlayer(state.selectedItem, state.quantity)
                         end
-                        setStatus(msg, not ok)
+                        setStatus(msg, ok and "ok" or "err")
                     end
                     os.sleep(1.5); state.selectedItem = nil; updateList(); drawScreen()
                 end

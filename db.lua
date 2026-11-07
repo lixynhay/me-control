@@ -180,6 +180,20 @@ function db.getLogs()
     return data.logs
 end
 
+-- Полностью очистить журнал операций
+function db.clearLogs()
+    if not data then return false end
+    data.logs = {}
+    db.save()
+    return true
+end
+
+-- Сколько записей в журнале
+function db.getLogsCount()
+    if not data or not data.logs then return 0 end
+    return #data.logs
+end
+
 -- Забанить игрока. durationMinutes > 0 — временный бан, иначе навсегда
 function db.banPlayer(actorName, targetName, reason, durationMinutes)
     if not db.isAdmin(actorName) then

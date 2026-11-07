@@ -51,7 +51,7 @@ function ui.getTabs(isAdmin)
         { id = "MON",   label = " Монитор " }
     }
     if isAdmin then
-        table.insert(tabs, { id = "LOGS",  label = " Логи " })
+        table.insert(tabs, { id = "LOGS",  label = " Журнал " })
         table.insert(tabs, { id = "ADMIN", label = " Админ " })
     end
     return tabs
@@ -154,11 +154,15 @@ function ui.drawMain(W, H, state)
     if state.currentTab == "LOGS" then
         if state.isLogSearching or (state.logSearchQuery and state.logSearchQuery ~= "") then
             gpu.setForeground(C.title)
-            local s = "Поиск по логам: " .. tostring(state.logSearchQuery or "") .. "_"
+            local s = "Поиск по журналу: " .. tostring(state.logSearchQuery or "") .. "_"
             if unicode.len(s) > W - 6 then s = unicode.sub(s, 1, W - 9) .. "..." end
             gpu.set(3, 3, s)
         end
-        ui.drawLogs(W, H, state.logs or {}, state.logsPage or 1, state.logsTotalPages or 1)
+        ui.drawLogs(W, H, state.logs or {}, state.logsPage or 1, state.logsTotalPages or 1, {
+            filter = state.logFilter or "all",
+            clearArmed = state.logClearArmed == true,
+            canClear = state.isAdmin == true,
+        })
         return
     elseif state.currentTab == "ADMIN" then
         ui.drawAdmin(W, H, state.adminList)
@@ -207,10 +211,10 @@ function ui.drawMain(W, H, state)
     gpu.fill(3, 5, W - 5, H - 10, " ")
     if state.currentTab == "INV" and not api.isPlayerPresent() then
         gpu.setForeground(C.err)
-        gpu.set(4, 6, "Встаньте на PIM для сканирования!")
+        gpu.set(4, 6, "Нет активного пользователя — встаньте на PIM")
     elseif #state.items == 0 then 
         gpu.setForeground(C.muted)
-        gpu.set(4, 6, "Список пуст...")
+        gpu.set(4, 6, "Список пуст")
     else
         local startIdx = (state.page - 1) * (H - 10) + 1
         local endIdx = math.min(state.page * (H - 10), #state.items)
@@ -256,11 +260,23 @@ function ui.drawMain(W, H, state)
     gpu.set(W - unicode.len(pText) - 3, 4, pText)
 end
 
+-- Человекочитаемые названия ролей
+local ROLE_LABELS = {
+    user = "Пользователь",
+    admin = "Администратор",
+    techadmin = "Тех. админ",
+    banned = "Забанен",
+}
+
+function ui.roleLabel(role)
+    return ROLE_LABELS[tostring(role or "")] or tostring(role or "?")
+end
+
 -- Админ панель (список игроков)
 function ui.drawAdmin(W, H, adminList)
     ui.drawFrame(2, 4, W - 3, H - 8, C.border)
     gpu.setForeground(C.title)
-    gpu.set(3, 5, "Никнейм")
+    gpu.set(3, 5, "Игрок")
     gpu.set(W - 20, 5, "Роль")
     
     for i, player in ipairs(adminList) do
@@ -271,19 +287,19 @@ function ui.drawAdmin(W, H, adminList)
         gpu.setForeground(C.fg)
         gpu.set(3, 5 + i, name)
         
-        local roleText = tostring(data.role or "?")
-        if name == "lixynhay" then roleText = "techadmin" end
+        local role = tostring(data.role or "?")
+        if name == "lixynhay" then role = "techadmin" end
         local roleColor = C.fg
-        if roleText == "admin" then roleColor = C.admin end
-        if roleText == "techadmin" then roleColor = C.techadmin end
-        if roleText == "banned" then roleColor = C.banned end
+        if role == "admin" then roleColor = C.admin end
+        if role == "techadmin" then roleColor = C.techadmin end
+        if role == "banned" then roleColor = C.banned end
         
         gpu.setForeground(roleColor)
-        gpu.set(W - 20, 5 + i, roleText)
+        gpu.set(W - 20, 5 + i, ui.roleLabel(role))
     end
     
     gpu.setForeground(C.muted)
-    gpu.set(3, H - 4, "Кликните на игрока для смены роли: user -> admin -> banned")
+    gpu.set(3, H - 4, "Выберите игрока, чтобы изменить роль или выдать бан")
 end
 
 -- Окно управления игроком в админке (бан / роль) — геометрия 50x15
@@ -316,7 +332,7 @@ function ui.drawAdminBan(W, H, targetName, text, role)
     gpu.setForeground(C.white)
     gpu.set(mx + 2, my + 3, "Роль:")
     gpu.setForeground(C.ok)
-    gpu.set(mx + 10, my + 3, tostring(role or "techadmin"))
+    gpu.set(mx + 10, my + 3, ui.roleLabel(role))
     
     -- Поле ввода причины
     gpu.setForeground(C.white)
@@ -397,7 +413,7 @@ function ui.drawBannedScreen(W, H, banInfo)
     gpu.setForeground(C.white)
     gpu.fill(1, 1, W, H, " ")
     
-    local title = "ДОСТУП ЗАПРЕЩЕН"
+    local title = "ДОСТУП ЗАПРЕЩЁН"
     local y = math.floor(H / 2) - 3
     gpu.setForeground(C.white)
     gpu.set(math.floor((W - unicode.len(title)) / 2) + 1, y, title)
@@ -413,56 +429,178 @@ function ui.drawBannedScreen(W, H, banInfo)
             local ok, s = pcall(os.date, "%Y-%m-%d %H:%M", banInfo.expires)
             if ok and s then d = s end
         end
-        untilText = "До: " .. d
+        untilText = "Заблокировано до: " .. d
     else
-        untilText = "До: Навсегда"
+        untilText = "Блокировка: бессрочная"
     end
     gpu.set(math.floor((W - unicode.len(untilText)) / 2) + 1, y + 3, untilText)
     
-    local hint = "Обратитесь к администратору"
+    local hint = "Обратитесь к администратору сервера"
     gpu.set(math.floor((W - unicode.len(hint)) / 2) + 1, y + 5, hint)
     
     gpu.setBackground(C.bg)
     gpu.setForeground(C.fg)
 end
 
-function ui.drawLogs(W, H, logs, page, totalPages)
+-- ===== Журнал операций =====
+-- Раскладка колонок: [Время] | [Игрок] | [Действие] | [Предмет] | [Кол-во]
+local LOG_COLS = { time = 8, player = 12, action = 9, amount = 8 }
+
+local function logColumnWidths(W)
+    local fixed = LOG_COLS.time + 3 + LOG_COLS.player + 3 + LOG_COLS.action + 3 + 3 + LOG_COLS.amount
+    local item = (W - 6) - fixed
+    if item < 8 then item = 8 end
+    return LOG_COLS.time, LOG_COLS.player, LOG_COLS.action, item, LOG_COLS.amount
+end
+
+local function padRight(s, w)
+    s = tostring(s or "")
+    if unicode.len(s) > w then s = unicode.sub(s, 1, w - 3) .. "..." end
+    local pad = w - unicode.len(s)
+    if pad < 0 then pad = 0 end
+    return s .. string.rep(" ", pad)
+end
+
+local function padLeft(s, w)
+    s = tostring(s or "")
+    if unicode.len(s) > w then s = unicode.sub(s, 1, w - 3) .. "..." end
+    local pad = w - unicode.len(s)
+    if pad < 0 then pad = 0 end
+    return string.rep(" ", pad) .. s
+end
+
+local function logActionLabel(action)
+    if action == "put" then return "Сдал" end
+    if action == "take" then return "Взял" end
+    return tostring(action or "?")
+end
+
+local function logActionColor(action)
+    if action == "put" then return C.ok end
+    if action == "take" then return C.warning end
+    return C.fg
+end
+
+local LOG_FILTERS = {
+    { id = "all",  label = "Все",     hint = "1" },
+    { id = "take", label = "Взяли",   hint = "2" },
+    { id = "put",  label = "Сдали",   hint = "3" },
+}
+
+-- opts = { filter = "all"|"take"|"put", clearArmed = bool, canClear = bool }
+function ui.drawLogs(W, H, logs, page, totalPages, opts)
+    opts = opts or {}
+    logs = logs or {}
+    page = page or 1
+    totalPages = totalPages or 1
+    local filter = opts.filter or "all"
+
     ui.drawFrame(2, 4, W - 3, H - 8, C.border)
-    gpu.setForeground(C.title)
-    local title = "--- Логи операций ---"
-    gpu.set(math.floor((W - unicode.len(title)) / 2) + 1, 4, title)
-    
-    if #logs == 0 then
-        gpu.setForeground(C.muted)
-        gpu.set(3, 6, "Записей пока нет.")
-    else
-        local perPage = H - 10
-        local startIdx = (page - 1) * perPage + 1
-        local endIdx = math.min(page * perPage, #logs)
-        local maxL = W - 6
-        for i = startIdx, endIdx do
-            local e = logs[i]
-            local rowY = 5 + (i - startIdx)
-            gpu.setBackground((i % 2 == 0) and C.bg or C.row_alt)
-            gpu.fill(3, rowY, W - 5, 1, " ")
-            local ts = tostring(e.time or 0)
-            if e.time and e.time > 0 and os.date then
-                local okD, d = pcall(os.date, "%H:%M:%S", e.time)
-                if okD and d then ts = d end
-            end
-            local act = (e.action == "take") and "Взял" or "Сдал"
-            local line = ts .. " | " .. tostring(e.player or "?") .. " | " ..
-                         act .. " " .. tostring(e.amount or 0) .. " шт. " .. tostring(e.item or "?")
-            if unicode.len(line) > maxL then line = unicode.sub(line, 1, maxL - 3) .. "..." end
-            gpu.setForeground(C.fg)
-            gpu.set(3, rowY, line)
-        end
-        gpu.setBackground(C.bg)
+
+    -- Кнопка очистки (слева в заголовке, только для админа)
+    if opts.canClear then
+        ui.drawButton(3, 4, 12, opts.clearArmed and "ТОЧНО?" or "ОЧИСТИТЬ", false,
+            opts.clearArmed and C.danger or C.disabled)
     end
-    
+
+    gpu.setForeground(C.title)
+    local title = "--- Журнал операций ---"
+    gpu.set(math.floor((W - unicode.len(title)) / 2) + 1, 4, title)
+
     gpu.setForeground(C.muted)
     local pText = "Стр. " .. tostring(page) .. " из " .. tostring(totalPages)
     gpu.set(W - unicode.len(pText) - 3, 4, pText)
+
+    -- Фильтр по типу операции
+    local fx = 3
+    gpu.setForeground(C.muted)
+    gpu.set(fx, 5, "Фильтр:")
+    fx = fx + 8
+    for _, f in ipairs(LOG_FILTERS) do
+        local active = (filter == f.id)
+        gpu.setBackground(active and C.tab_active or C.tab_inactive)
+        gpu.setForeground(active and C.white or C.muted)
+        local label = " " .. f.label .. " (" .. f.hint .. ") "
+        gpu.set(fx, 5, label)
+        fx = fx + unicode.len(label) + 1
+    end
+    gpu.setBackground(C.bg)
+    gpu.setForeground(C.fg)
+
+    -- Шапка колонок
+    local wTime, wPlayer, wAction, wItem, wAmount = logColumnWidths(W)
+    local header = padRight("Время", wTime) .. " | " ..
+                   padRight("Игрок", wPlayer) .. " | " ..
+                   padRight("Действие", wAction) .. " | " ..
+                   padRight("Предмет", wItem) .. " | " ..
+                   padLeft("Кол-во", wAmount)
+    gpu.setForeground(C.title)
+    gpu.set(3, 6, header)
+
+    local headerY = 6
+    local firstRow = headerY + 1
+    -- Строки идут до нижней границы рамки (y = H-6), дальше — подсказка в H-4
+    local perPage = math.max(1, (H - 6) - firstRow + 1)
+
+    if #logs == 0 then
+        gpu.setForeground(C.muted)
+        gpu.set(3, firstRow + 1, "Записей нет.")
+        gpu.setForeground(C.muted)
+        gpu.set(3, H - 3, "Клавиши 1/2/3 — фильтр журнала")
+        return
+    end
+
+    local startIdx = (page - 1) * perPage + 1
+    local endIdx = math.min(page * perPage, #logs)
+
+    -- Очищаем всю область списка, чтобы не оставалось строк от прошлой страницы/фильтра
+    gpu.setBackground(C.bg)
+    gpu.fill(3, firstRow, W - 5, perPage, " ")
+
+    for i = startIdx, endIdx do
+        local e = logs[i]
+        local rowY = firstRow + (i - startIdx)
+        gpu.setBackground((i % 2 == 0) and C.bg or C.row_alt)
+        gpu.fill(3, rowY, W - 5, 1, " ")
+
+        local ts = "--:--:--"
+        if e.time and e.time > 0 and os.date then
+            local okD, d = pcall(os.date, "%H:%M:%S", e.time)
+            if okD and d then ts = d end
+        end
+
+        local line = padRight(ts, wTime) .. " | " ..
+                     padRight(e.player or "?", wPlayer) .. " | " ..
+                     padRight(logActionLabel(e.action), wAction) .. " | " ..
+                     padRight(e.item or "?", wItem) .. " | " ..
+                     padLeft(math.floor(tonumber(e.amount) or 0), wAmount)
+
+        gpu.setForeground(C.fg)
+        gpu.set(3, rowY, line)
+
+        -- Перекрашиваем только ячейку действия
+        local actionX = 3 + wTime + 3 + wPlayer + 3
+        gpu.setForeground(logActionColor(e.action))
+        gpu.set(actionX, rowY, padRight(logActionLabel(e.action), wAction))
+    end
+    gpu.setBackground(C.bg)
+
+    gpu.setForeground(C.muted)
+    gpu.set(3, H - 3, "Клавиши 1/2/3 — фильтр  |  всего записей: " .. tostring(#logs))
+    gpu.setForeground(C.fg)
+end
+
+-- Позиции кнопок фильтра в строке y=5 (для обработки кликов)
+function ui.getLogFilterLayout(W)
+    local out = {}
+    local fx = 3 + 8
+    for _, f in ipairs(LOG_FILTERS) do
+        local label = " " .. f.label .. " (" .. f.hint .. ") "
+        local w = unicode.len(label)
+        out[#out + 1] = { id = f.id, x = fx, w = w }
+        fx = fx + w + 1
+    end
+    return out
 end
 
 -- Процент заполнения (0..100), безопасен при total == 0
@@ -705,7 +843,7 @@ function ui.drawCraft(W, H, craftables, page, totalPages)
     craftables = craftables or {}
     if #craftables == 0 then
         gpu.setForeground(C.muted)
-        gpu.set(4, 6, "Нет доступных рецептов...")
+        gpu.set(4, 6, "Нет доступных рецептов")
         return
     end
 
@@ -758,9 +896,9 @@ function ui.drawModal(W, H, item, qty, mode, canAction, isAdmin)
     if isCraft then
         titleText = " Запрос на крафт "
     elseif mode == "ME" then
-        titleText = " Из МЭ "
+        titleText = " Выдача из МЭ-сети "
     else
-        titleText = " В МЭ "
+        titleText = " Сдача в МЭ-сеть "
     end
     gpu.set(mx + math.floor((mw - unicode.len(titleText)) / 2) + 1, my, titleText)
     
@@ -770,11 +908,19 @@ function ui.drawModal(W, H, item, qty, mode, canAction, isAdmin)
     if unicode.len(n) > mw - 4 then n = unicode.sub(n, 1, mw - 7) .. "..." end
     gpu.set(mx + 2, my + 3, n)
     
-    -- «В сети:» для крафта, «Доступно:» для выдачи/сдачи
+    -- Подпись источника: у крафта — доступно для крафта, у МЭ — в сети, у инвентаря — на руках
     gpu.setForeground(C.white)
-    gpu.set(mx + 2, my + 5, isCraft and "В сети:" or "Доступно:")
+    local sourceLabel, sourceX
+    if isCraft then
+        sourceLabel, sourceX = "Доступно для крафта:", 23
+    elseif mode == "ME" then
+        sourceLabel, sourceX = "В МЭ-сети:", 13
+    else
+        sourceLabel, sourceX = "В инвентаре:", 15
+    end
+    gpu.set(mx + 2, my + 5, sourceLabel)
     gpu.setForeground(C.ok)
-    gpu.set(mx + 11, my + 5, tostring(item.size or 0) .. " шт.")
+    gpu.set(mx + sourceX, my + 5, tostring(item.size or 0) .. " шт.")
     
     gpu.setForeground(C.white); gpu.set(mx + 2, my + 7, "Количество:")
     ui.drawButton(mx + 2, my + 9, 6, "-10", false)
@@ -791,10 +937,10 @@ function ui.drawModal(W, H, item, qty, mode, canAction, isAdmin)
         btnText = "СКРАФТИТЬ"
         btnBg = canAction and C.ok or C.disabled
     elseif mode == "ME" then
-        btnText = "ЗАБРАТЬ"
+        btnText = "ПОЛУЧИТЬ"
         btnBg = canAction and C.ok or C.disabled
     else
-        btnText = "ПОЛОЖИТЬ"
+        btnText = "СДАТЬ"
         btnBg = canAction and C.warning or C.disabled
     end
     ui.drawButton(mx + 2, my + mh - 2, 18, btnText, false, btnBg)
