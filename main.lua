@@ -18,10 +18,14 @@ local W, H = gpu.getResolution()
 
 local state = {
     items = {}, page = 1, totalPages = 1, selectedItem = nil, quantity = 1,
-    currentTab = "ME", player = nil, isAdmin = false, adminPlayers = {}
+    currentTab = "ME", player = nil, isAdmin = false, adminList = {},
+    statusMsg = "", statusErr = false
 }
 
 local function setStatus(msg, isError)
+    state.statusMsg = msg
+    state.statusErr = isError
+    -- Мгновенная отрисовка статуса (если drawScreen не будет вызван сразу)
     gpu.setBackground(config.colors.bg)
     gpu.fill(1, H - 1, W, 1, " ")
     gpu.setForeground(isError and config.colors.err or config.colors.ok)
@@ -34,20 +38,35 @@ local function updateList()
     elseif state.currentTab == "INV" then
         state.items = api.getPlayerInventory()
     elseif state.currentTab == "ADMIN" then
-        state.adminPlayers = db.getAllPlayers()
+        -- Конвертируем таблицу в сортированный массив для стабильного отображения
+        local raw = db.getAllPlayers()
+        state.adminList = {}
+        for name, data in pairs(raw) do
+            table.insert(state.adminList, {name = name, data = data})
+        end
+        table.sort(state.adminList, function(a, b) return a.name < b.name end)
     end
-    state.totalPages = math.max(1, math.ceil(#state.items / (H - 10)))
-    if state.page > state.totalPages then state.page = state.totalPages end
+    
+    if state.currentTab ~= "ADMIN" then
+        state.totalPages = math.max(1, math.ceil(#state.items / (H - 10)))
+        if state.page > state.totalPages then state.page = state.totalPages end
+    end
 end
 
 local function drawScreen()
     ui.drawMain(W, H, state)
+    -- После отрисовки основного экрана принудительно рисуем статус, чтобы он не исчез
+    gpu.setBackground(config.colors.bg)
+    gpu.fill(1, H - 1, W, 1, " ")
+    gpu.setForeground(state.statusErr and config.colors.err or config.colors.ok)
+    gpu.set(3, H - 1, state.statusMsg)
 end
 
 updateList(); drawScreen()
 
 while true do
-    local eventName, p1, p2 = event.pull("touch", "player_on", "player_off")
+    -- ИСПРАВЛЕНИЕ 1: Добавлена 4-я переменная p3 для правильного захвата координат клика
+    local eventName, p1, p2, p3 = event.pull("touch", "player_on", "player_off")
     
     if eventName == "player_on" then
         state.player = tostring(p1)
@@ -64,54 +83,59 @@ while true do
         state.isAdmin = (pData.role == "admin")
         if state.isAdmin then setStatus("Вы вошли как Админ.") end
         
-        state.currentTab = "ME" -- Сбрасываем на главную
+        state.currentTab = "ME"
         updateList(); drawScreen()
         
     elseif eventName == "player_off" then
         state.player = nil
         state.isAdmin = false
-        state.currentTab = "ME" -- Если админ ушел, вкладка админа пропадет
+        state.currentTab = "ME"
+        state.selectedItem = nil -- ИСПРАВЛЕНИЕ 4: Закрываем открытую карточку при уходе
+        state.page = 1
         setStatus("Игрок ушел с PIM.", true)
         updateList(); drawScreen()
         
     elseif eventName == "touch" then
-        local x, y = p1, p2
+        -- ИСПРАВЛЕНИЕ 1: Для touch p2 - это X, p3 - это Y
+        local x, y = p2, p3
         
-        -- Переключение вкладок (сложная математика, чтобы совпадало с ui.lua)
+        -- Переключение вкладок
         if y == 2 then
             local t1, t2, t3 = " МЭ-сеть ", " Инвентарь ", " Админ "
             local totalW = unicode.len(t1) + unicode.len(t2) + 4
             if state.isAdmin then totalW = totalW + unicode.len(t3) + 2 end
             local startX = math.floor((W - totalW) / 2) + 1
             
+            local newTab = state.currentTab
             if x >= startX and x < startX + unicode.len(t1) then
-                state.currentTab = "ME"
+                newTab = "ME"
             elseif x >= startX + unicode.len(t1) + 2 and x < startX + unicode.len(t1) + unicode.len(t2) + 2 then
-                state.currentTab = "INV"
-            elseif state.isAdmin and x >= startX + unicode.len(t1) + unicode.len(t2) + 4 then
-                state.currentTab = "ADMIN"
+                newTab = "INV"
+            elseif state.isAdmin and x >= startX + unicode.len(t1) + unicode.len(t2) + 4 and x < startX + totalW then
+                newTab = "ADMIN"
             end
-            state.page = 1; state.selectedItem = nil
-            updateList(); drawScreen()
+            
+            -- ИСПРАВЛЕНИЕ 5: Реагируем только если вкладка реально изменилась
+            if newTab ~= state.currentTab then
+                state.currentTab = newTab
+                state.page = 1; state.selectedItem = nil
+                updateList(); drawScreen()
+            end
             
         elseif state.currentTab == "ADMIN" and state.isAdmin then
             -- Клик по списку игроков в админке
             local row = y - 5
-            if row >= 1 then
-                local i = 1
-                for name, data in pairs(state.adminPlayers) do
-                    if i == row then
-                        -- Меняем роль
-                        local newRole = "user"
-                        if data.role == "user" then newRole = "admin"
-                        elseif data.role == "admin" then newRole = "banned" end
-                        db.setRole(name, newRole)
-                        setStatus("Роль " .. name .. " изменена на " .. newRole)
-                        updateList(); drawScreen()
-                        break
-                    end
-                    i = i + 1
-                end
+            if row >= 1 and state.adminList[row] then -- ИСПРАВЛЕНИЕ 3: Используем отсортированный массив
+                local targetName = state.adminList[row].name
+                local targetData = state.adminList[row].data
+                
+                local newRole = "user"
+                if targetData.role == "user" then newRole = "admin"
+                elseif targetData.role == "admin" then newRole = "banned" end
+                
+                db.setRole(targetName, newRole)
+                setStatus("Роль " .. targetName .. " изменена на " .. newRole)
+                updateList(); drawScreen()
             end
             
         elseif state.selectedItem then
