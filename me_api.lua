@@ -19,7 +19,13 @@ function api.getNetworkItems()
     local list = {}
     for _, i in pairs(raw) do 
         if i and i.label then 
-            table.insert(list, {label = i.label, size = i.size, name = i.name, damage = i.damage}) 
+            table.insert(list, {
+                label = i.label, 
+                size = i.size, 
+                name = i.name, 
+                damage = i.damage,
+                fingerprint = i.fingerprint -- Добавляем родной отпечаток МЭ
+            }) 
         end 
     end
     table.sort(list, function(a, b) return a.label < b.label end)
@@ -77,8 +83,9 @@ function api.exportToPlayer(item, amount)
     local realAmount = math.min(amount, item.size)
     if realAmount <= 0 then return false, "В МЭ нет предметов" end
     
+    local fp = item.fingerprint or {id = item.name, dmg = item.damage or 0}
     local ok, result = pcall(function()
-        return me.exportItem({id = item.name, dmg = item.damage}, config.side_export, realAmount, 0)
+        return me.exportItem(fp, config.side_export, realAmount, 0)
     end)
     if not ok then return false, "Ошибка API: " .. tostring(result) end
     local exported = tonumber(result) or 0
