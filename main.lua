@@ -140,12 +140,32 @@ while true do
                 state.currentTab = newTab
                 state.page = 1; state.selectedItem = nil
                 updateList(); drawScreen()
+                -- Временная отладка: сколько слотов видит PIM
+                if state.currentTab == "INV" and api.isPlayerPresent() then
+                    setStatus("Слотов в PIM: " .. tostring(component.pim.getInventorySize()))
+                end
             end
             
+        elseif not state.selectedItem and y == H - 2 then
+            -- Нижняя панель: работает на всех вкладках
+            if x >= 5 and x < 17 then if state.page > 1 then state.page = state.page - 1; drawScreen() end end
+            if x >= 19 and x < 34 then state.lastUpdate = 0; updateList(); drawScreen(); setStatus("Обновлено.") end
+            if x >= 36 and x < 48 then if state.page < state.totalPages then state.page = state.page + 1; drawScreen() end end
+            if x >= 52 and x < 67 and state.currentTab == "INV" then
+                if not api.isPlayerPresent() then
+                    setStatus("Встаньте на PIM для сдачи!", true)
+                else
+                    local moved, msg = api.depositAll()
+                    updateList(); drawScreen()
+                    setStatus(msg, moved == 0)
+                end
+            end
+            if x >= W - 20 and x < W - 5 then setStatus("Выход...", true); os.sleep(0.5); os.exit() end
+            
         elseif state.currentTab == "ADMIN" and state.isAdmin then
-            -- Клик по списку игроков в админке
+            -- Клик по списку игроков в админке (только по строкам списка, не по нижней панели)
             local row = y - 5
-            if row >= 1 and state.adminList[row] then -- ИСПРАВЛЕНИЕ 3: Используем отсортированный массив
+            if y >= 6 and y <= H - 3 and row >= 1 and state.adminList[row] then -- ИСПРАВЛЕНИЕ 3: Используем отсортированный массив
                 local targetName = state.adminList[row].name
                 local targetData = state.adminList[row].data
                 
@@ -218,26 +238,8 @@ while true do
             end
             
         else
-            -- Навигация и список
-            local clicked = false
-            if y == H - 2 then
-                if x >= 5 and x < 17 then clicked = true; if state.page > 1 then state.page = state.page - 1; drawScreen() end end
-                if x >= 19 and x < 34 then clicked = true; state.lastUpdate = 0; updateList(); drawScreen(); setStatus("Обновлено.") end
-                if x >= 36 and x < 48 then clicked = true; if state.page < state.totalPages then state.page = state.page + 1; drawScreen() end end
-                if x >= 52 and x < 67 and state.currentTab == "INV" then
-                    clicked = true
-                    if not api.isPlayerPresent() then
-                        setStatus("Встаньте на PIM для сдачи!", true)
-                    else
-                        local moved, msg = api.depositAll()
-                        updateList(); drawScreen()
-                        setStatus(msg, moved == 0)
-                    end
-                end
-                if x >= W - 20 and x < W - 5 then setStatus("Выход...", true); os.sleep(0.5); os.exit() end
-            end
-            
-            if not clicked and y >= 5 and y <= H - 5 and x >= 3 and x <= W - 3 then
+            -- Клик по списку (навигация уже обработана выше)
+            if y >= 5 and y <= H - 5 and x >= 3 and x <= W - 3 then
                 local idx = (state.page - 1) * (H - 10) + (y - 4)
                 if state.items[idx] then 
                     state.selectedItem = state.items[idx]

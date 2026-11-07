@@ -74,6 +74,15 @@ function ui.drawMain(W, H, state)
     ui.drawFrame(1, 1, W, H, C.border)
     ui.drawTabs(W, state.currentTab, state.isAdmin)
     
+    -- Нижняя панель кнопок рисуется для всех вкладок (до ветвлений с return)
+    ui.drawButton(5, H - 2, 12, "<<", false)
+    ui.drawButton(19, H - 2, 15, "ОБНОВИТЬ", false)
+    ui.drawButton(36, H - 2, 12, ">>", false)
+    if state.currentTab == "INV" then
+        ui.drawButton(52, H - 2, 15, "СДАТЬ ВСЁ", false, 0xAA5500)
+    end
+    ui.drawButton(W - 20, H - 2, 15, "ВЫХОД", false)
+    
     if state.currentTab == "ADMIN" then
         ui.drawAdmin(W, H, state.adminList)
         return
@@ -91,14 +100,6 @@ function ui.drawMain(W, H, state)
     gpu.setForeground(C.title)
     local title = state.currentTab == "ME" and "--- Сеть МЭ ---" or "--- Ваш Инвентарь ---"
     gpu.set(math.floor((W - unicode.len(title)) / 2) + 1, 4, title)
-    
-    ui.drawButton(5, H - 2, 12, "<<", false)
-    ui.drawButton(19, H - 2, 15, "ОБНОВИТЬ", false)
-    ui.drawButton(36, H - 2, 12, ">>", false)
-    if state.currentTab == "INV" then
-        ui.drawButton(52, H - 2, 15, "СДАТЬ ВСЁ", false, 0xAA5500)
-    end
-    ui.drawButton(W - 20, H - 2, 15, "ВЫХОД", false)
     
     -- Отрисовка списка
     gpu.fill(2, 5, W - 3, H - 9, " ")
@@ -148,7 +149,7 @@ function ui.drawAdmin(W, H, adminList)
     end
     
     gpu.setForeground(0x888888)
-    gpu.set(3, H - 2, "Кликните на игрока для смены роли: user -> admin -> banned")
+    gpu.set(3, H - 4, "Кликните на игрока для смены роли: user -> admin -> banned")
 end
 
 function ui.drawMonitor(W, H, statusList)
@@ -183,7 +184,7 @@ function ui.drawMonitor(W, H, statusList)
     end
     
     gpu.setForeground(0x888888)
-    gpu.set(3, H - 4, "Нажмите ОБНОВИТЬ для обновления данных.")
+    gpu.set(3, H - 4, "Автообновление включено (каждые 2 сек)")
 end
 
 function ui.drawStats(W, H, info)

@@ -19,28 +19,44 @@ function api.getNetworkItems()
     return list
 end
 
--- Получить инвентарь игрока (сгруппированный)
+-- Получить инвентарь игрока (с поддержкой формата OpenPeripheral Addon)
 function api.getPlayerInventory()
     local inv = {}
     if not api.isPlayerPresent() then return inv end
     
     local size = pim.getInventorySize()
+    if not size or size == 0 then return inv end
+
     for slot = 1, size do
         local stack = pim.getStackInSlot(slot)
-        if stack and stack.label then
-            local found = false
-            for _, item in ipairs(inv) do
-                if item.label == stack.label and item.damage == stack.damage then
-                    item.size = item.size + stack.size
-                    found = true
-                    break
+        if stack then
+            -- Поддержка форматов OpenPeripheral (display_name / qty) и OC (label / size)
+            local itemLabel = stack.display_name or stack.label or stack.name or "Неизвестный предмет"
+            local itemCount = stack.qty or stack.size or 0
+            local itemName  = stack.name or stack.id or itemLabel
+            local itemDmg   = stack.damage or stack.dmg or 0
+            
+            if itemCount > 0 then
+                local found = false
+                for _, item in ipairs(inv) do
+                    if item.label == itemLabel and item.damage == itemDmg then
+                        item.size = item.size + itemCount
+                        found = true
+                        break
+                    end
                 end
-            end
-            if not found then
-                table.insert(inv, {label = stack.label, size = stack.size, name = stack.name, damage = stack.damage})
+                if not found then
+                    table.insert(inv, {
+                        label = itemLabel, 
+                        size = itemCount, 
+                        name = itemName, 
+                        damage = itemDmg
+                    })
+                end
             end
         end
     end
+    
     table.sort(inv, function(a, b) return a.label < b.label end)
     return inv
 end
@@ -60,11 +76,16 @@ function api.pushFromPlayer(itemLabel, amount)
     local moved = 0
     for slot = 1, pim.getInventorySize() do
         local stack = pim.getStackInSlot(slot)
-        if stack and stack.label == itemLabel then
-            local canMove = math.min(amount - moved, stack.size)
-            if canMove > 0 then
-                moved = moved + pim.pushItem(config.side_push, slot, canMove)
-                if moved >= amount then break end
+        if stack then
+            -- Поддержка форматов OpenPeripheral (display_name / qty) и OC (label / size)
+            local stackLabel = stack.display_name or stack.label or stack.name
+            local stackCount = stack.qty or stack.size or 0
+            if stackLabel == itemLabel then
+                local canMove = math.min(amount - moved, stackCount)
+                if canMove > 0 then
+                    moved = moved + pim.pushItem(config.side_push, slot, canMove)
+                    if moved >= amount then break end
+                end
             end
         end
     end
@@ -156,8 +177,12 @@ function api.depositAll()
     local moved = 0
     for slot = 1, pim.getInventorySize() do
         local stack = pim.getStackInSlot(slot)
-        if stack and stack.size and stack.size > 0 then
-            moved = moved + pim.pushItem(config.side_push, slot, stack.size)
+        if stack then
+            -- Поддержка форматов OpenPeripheral (qty) и OC (size)
+            local stackCount = stack.qty or stack.size or 0
+            if stackCount > 0 then
+                moved = moved + pim.pushItem(config.side_push, slot, stackCount)
+            end
         end
     end
     if moved > 0 then
