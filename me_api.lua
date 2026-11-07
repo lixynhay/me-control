@@ -4,6 +4,13 @@ local db = require("db")
 
 local api = {}
 
+-- Удаляет коды форматирования Minecraft (§a, §b, §k и т.д.) из строки
+local function stripColor(text)
+    if type(text) ~= "string" then return tostring(text) end
+    -- Удаляем коды форматирования Minecraft (§a, §b, §k и т.д.)
+    return text:gsub("§.", "")
+end
+
 -- Получить предметы из МЭ
 function api.getNetworkItems()
     local me = component.me_interface
@@ -26,16 +33,18 @@ function api.getPlayerInventory()
     
     local pim = component.pim
     local okSize, size = pcall(function() return pim.getInventorySize() end)
-    if not okSize or not size or size == 0 then return inv end
+    if not okSize or not size then return inv end
+    size = math.floor(tonumber(size) or 0)
+    if size == 0 then return inv end
 
     for slot = 1, size do
         local sOk, stack = pcall(function() return pim.getStackInSlot(slot) end)
         if sOk and stack then
             -- Поддержка форматов OpenPeripheral (display_name / qty) и OC (label / size)
-            local itemLabel = stack.display_name or stack.label or stack.name or "Неизвестный предмет"
-            local itemCount = stack.qty or stack.size or 0
-            local itemName  = stack.name or stack.id or itemLabel
-            local itemDmg   = stack.damage or stack.dmg or 0
+            local itemLabel = stripColor(stack.display_name or stack.label or stack.name or "Неизвестный предмет")
+            local itemCount = math.floor(tonumber(stack.qty) or tonumber(stack.size) or 0)
+            local itemName  = stack.id or stack.name or itemLabel
+            local itemDmg   = math.floor(tonumber(stack.damage) or tonumber(stack.dmg) or 0)
             
             if itemCount > 0 then
                 local found = false

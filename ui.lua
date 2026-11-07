@@ -135,7 +135,7 @@ function ui.drawMain(W, H, state)
             local dLabel = state.items[i].label
             if unicode.len(dLabel) > maxL then dLabel = unicode.sub(dLabel, 1, maxL - 3) .. "..." end
             gpu.setForeground(C.fg)
-            gpu.set(3, 5 + (i - startIdx), dLabel .. string.rep(" ", maxL - unicode.len(dLabel)) .. " | " .. string.format("%8d", state.items[i].size))
+            gpu.set(3, 5 + (i - startIdx), dLabel .. string.rep(" ", maxL - unicode.len(dLabel)) .. " | " .. string.format("%8d", math.floor(state.items[i].size)))
         end
     end
     gpu.setForeground(C.muted)
