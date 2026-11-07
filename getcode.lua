@@ -4,7 +4,7 @@ local computer = require("computer")
 
 -- ================= НАСТРОЙКИ =================
 local USER = "lixynhay"
-local REPO = "OC-HiTech"
+local REPO = "me-control"
 local BRANCHES = {"main", "master"}
 local TARGET_DIR = "/home/"
 -- =============================================
