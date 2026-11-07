@@ -97,6 +97,19 @@ function ui.drawMain(W, H, state)
     gpu.setBackground(C.bg)
     gpu.fill(1, 1, W, H, " ")
     ui.drawFrame(1, 1, W, H, state.alertActive and C.danger or C.border)
+    
+    -- Индикатор текущего пользователя (кто стоит на PIM)
+    local who
+    if state.currentPlayer then
+        who = "[ Пользователь: " .. tostring(state.currentPlayer) .. " ]"
+        gpu.setForeground(C.ok)
+    else
+        who = "[ Панель заблокирована ]"
+        gpu.setForeground(C.danger)
+    end
+    if unicode.len(who) > W - 4 then who = unicode.sub(who, 1, W - 7) .. "..." end
+    gpu.set(W - unicode.len(who) - 1, 1, who)
+    
     ui.drawTabs(W, state.currentTab, state.isAdmin)
     
     -- Нижняя панель кнопок рисуется для всех вкладок (до ветвлений с return)

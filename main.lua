@@ -30,7 +30,7 @@ local W, H = gpu.getResolution()
 
 local state = {
     items = {}, page = 1, totalPages = 1, selectedItem = nil, quantity = 1,
-    currentTab = "ME", player = nil, isAdmin = false, adminList = {},
+    currentTab = "ME", player = nil, currentPlayer = nil, isAdmin = false, adminList = {},
     statusMsg = "", statusErr = false,
     networkInfo = {},
     monitorStatus = {},
@@ -122,6 +122,7 @@ end
 local initialPlayer = component.pim.getInventoryName()
 if initialPlayer and initialPlayer ~= "" then
     state.player = initialPlayer
+    state.currentPlayer = initialPlayer
     local pData = db.getPlayer(state.player)
     if pData then
         state.isAdmin = (pData.role == "admin")
@@ -154,7 +155,7 @@ while true do
     end
     
     -- Ловим все события; фильтрация выполняется ниже по eventName
-    local eventName, p1, p2, p3 = event.pull(0.1)
+    local eventName, p1, p2, p3, p4, p5 = event.pull(0.1)
     if eventName == "interrupted" then break end
     
     -- Автообновление статистики и монитора раз в 2 секунды (не трогаем открытую карточку)
@@ -166,6 +167,7 @@ while true do
     
     if eventName == "player_on" then
         state.player = tostring(p1)
+        state.currentPlayer = state.player
         local pData = db.getPlayer(state.player)
         
         if not pData then
@@ -184,6 +186,7 @@ while true do
         
     elseif eventName == "player_off" then
         state.player = nil
+        state.currentPlayer = nil
         state.isAdmin = false
         state.currentTab = "ME"
         state.selectedItem = nil -- ИСПРАВЛЕНИЕ 4: Закрываем открытую карточку при уходе
@@ -215,10 +218,17 @@ while true do
         end
         
     elseif eventName == "touch" then
-        -- ИСПРАВЛЕНИЕ 1: Для touch p2 - это X, p3 - это Y
+        -- ИСПРАВЛЕНИЕ 1: Для touch p2 - это X, p3 - это Y, p5 - имя игрока
         local x, y = p2, p3
-        -- Любой клик выходит из режима поиска (кнопка ПОИСК ниже включит его снова)
-        state.isSearching = false
+        local clickPlayer = p5
+        -- Блокировка панели по игроку на PIM
+        if state.currentPlayer == nil then
+            setStatus("Встаньте на PIM для использования панели!", true)
+        elseif clickPlayer ~= state.currentPlayer then
+            setStatus("Панель занята игроком " .. tostring(state.currentPlayer), true)
+        else
+            -- Любой клик выходит из режима поиска (кнопка ПОИСК ниже включит его снова)
+            state.isSearching = false
         
         -- Переключение вкладок
         if y == 2 then
@@ -348,6 +358,7 @@ while true do
                     ui.drawModal(W, H, state.selectedItem, state.quantity, state.currentTab, canAct, state.isAdmin) 
                 end
             end
+        end
         end
     end
 end
