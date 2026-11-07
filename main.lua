@@ -44,6 +44,7 @@ local state = {
     logs = {},
     logsPage = 1,
     logsTotalPages = 1,
+    lastBanCheck = 0,
     isBanned = false,
     banInfo = nil,
     adminTarget = nil
@@ -179,6 +180,22 @@ while true do
         rs.setOutput(config.alerts.redstoneSide, alertActive and 15 or 0)
     end
     
+    -- Проверка истечения бана раз в 5 секунд
+    if state.isBanned and computer.uptime() - (state.lastBanCheck or 0) > 5 then
+        state.lastBanCheck = computer.uptime()
+        if state.banInfo and state.banInfo.expires and state.banInfo.expires > 0 then
+            local okT, now = pcall(os.time)
+            now = okT and tonumber(now) or nil
+            if now and now >= state.banInfo.expires then
+                db.unbanPlayer(state.player)
+                state.isBanned = false
+                state.banInfo = nil
+                setStatus("Бан истёк, доступ восстановлен")
+                updateList(); drawScreen()
+            end
+        end
+    end
+    
     -- Ловим все события; фильтрация выполняется ниже по eventName
     local eventName, p1, p2, p3, p4, p5 = event.pull(0.1)
     if eventName == "interrupted" then break end
@@ -267,9 +284,13 @@ while true do
         local x, y = p2, p3
         local clickPlayer = p5
         
-        -- Кнопка «ВЫХОД» доступна всегда, даже без игрока на PIM или чужому клику
+        -- Кнопка «ВЫХОД» — только для админа (доступна даже без игрока на PIM)
         if y == H - 2 and x >= W - 20 and x < W - 5 then
-            setStatus("Выход...", true); os.sleep(0.5); break
+            if not state.isAdmin then
+                setStatus("Только админ может выключить панель", true)
+            else
+                setStatus("Выход...", true); os.sleep(0.5); break
+            end
         end
         
         -- Забанен — все действия заблокированы (кроме ВЫХОД, обработанного выше)
@@ -332,7 +353,7 @@ while true do
                     setStatus(msg, moved == 0 or (msg and msg:find("ВНИМАНИЕ", 1, true) ~= nil))
                 end
             end
-            if x >= bottom.exit.x and x < bottom.exit.x + bottom.exit.w then setStatus("Выход...", true); os.sleep(0.5); break end
+            -- «ВЫХОД» обработан выше (только для админа)
             
         elseif state.currentTab == "ADMIN" and state.isAdmin then
             -- Окно управления игроком (бан / роль)

@@ -8,6 +8,19 @@ local C = config.colors
 local ui = {}
 
 function ui.drawFrame(x, y, w, h, color)
+    -- Лёгкая тень: тот же прямоугольник на 1 символ правее/ниже, чёрным
+    local sw, sh = gpu.getResolution()
+    local sx, sy = x + 1, y + 1
+    if sx + w - 1 <= sw and sy + h - 1 <= sh and w > 2 and h > 2 then
+        gpu.setForeground(0x000000)
+        gpu.set(sx, sy, "╔" .. string.rep("═", w - 2) .. "╗")
+        for i = 1, h - 2 do
+            gpu.set(sx, sy + i, "║")
+            gpu.set(sx + w - 1, sy + i, "║")
+        end
+        gpu.set(sx, sy + h - 1, "╚" .. string.rep("═", w - 2) .. "╝")
+    end
+    -- Основная рамка
     gpu.setForeground(color)
     gpu.set(x, y, "╔" .. string.rep("═", w - 2) .. "╗")
     for i = 1, h - 2 do 
@@ -87,7 +100,8 @@ function ui.drawTabs(W, currentTab, isAdmin)
     local layout = ui.getTabLayout(W, isAdmin)
     for _, tab in ipairs(layout) do
         gpu.setBackground(currentTab == tab.id and C.tab_active or C.tab_inactive)
-        gpu.setForeground(C.white)
+        -- OC GPU не умеет жирный шрифт: активная вкладка — ярко-белая, неактивные — приглушённые
+        gpu.setForeground(currentTab == tab.id and C.white or C.muted)
         gpu.set(tab.x, 2, tab.label)
     end
     gpu.setBackground(C.bg)
@@ -101,7 +115,7 @@ function ui.drawMain(W, H, state)
     
     -- Версия (слева на верхней рамке)
     gpu.setForeground(C.muted)
-    gpu.set(3, 1, tostring(config.version or ""))
+    gpu.set(3, 1, tostring(config.version or "") .. " | OC-Terminal")
     
     -- Индикатор текущего пользователя (кто стоит на PIM)
     local who
@@ -128,7 +142,9 @@ function ui.drawMain(W, H, state)
     if state.currentTab == "INV" and bottom.deposit then
         ui.drawButton(bottom.deposit.x, H - 2, bottom.deposit.w, "СДАТЬ ВСЁ", false, C.warning)
     end
-    ui.drawButton(bottom.exit.x, H - 2, bottom.exit.w, "ВЫХОД", false)
+    if state.isAdmin then
+        ui.drawButton(bottom.exit.x, H - 2, bottom.exit.w, "ВЫХОД", false)
+    end
     
     if state.currentTab == "LOGS" then
         ui.drawLogs(W, H, state.logs or {}, state.logsPage or 1, state.logsTotalPages or 1)
