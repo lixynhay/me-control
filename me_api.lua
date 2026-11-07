@@ -11,6 +11,14 @@ local function stripColor(text)
     return text:gsub("§.", "")
 end
 
+-- Имя игрока, стоящего на PIM (для логов)
+local function getPimPlayer()
+    if not component.isAvailable("pim") then return "Unknown" end
+    local ok, name = pcall(function() return component.pim.getInventoryName() end)
+    if ok and name and name ~= "" then return name end
+    return "Unknown"
+end
+
 -- Сколько предметов данного типа сейчас в МЭ (сначала по name, иначе по label)
 local function getNetworkCount(itemName, itemLabel)
     local me = component.me_interface
@@ -120,7 +128,9 @@ function api.exportToPlayer(item, amount)
     end)
     if not ok then return false, "Ошибка API: " .. tostring(result) end
     local exported = tonumber(result) or 0
-    if exported > 0 then return true, "Выдано: " .. exported .. " шт."
+    if exported > 0 then
+        db.addLog(getPimPlayer(), "take", item.label, exported)
+        return true, "Выдано: " .. exported .. " шт."
     else return false, "МЭ отказала в выдаче (0 шт.)" end
 end
 
@@ -187,6 +197,7 @@ function api.pushFromPlayer(item, amount)
         end
     end
 
+    db.addLog(getPimPlayer(), "put", itemLabel, moved)
     if moved >= amount then
         return true, "Сдано: " .. moved .. " шт."
     end

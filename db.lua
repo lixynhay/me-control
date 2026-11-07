@@ -18,6 +18,7 @@ function db.load()
                 data.players = data.players or {}
                 data.config = data.config or { allowUserWithdraw = true, allowUserDeposit = true }
                 data.thresholds = data.thresholds or {}
+                data.logs = data.logs or {}
             end
         end
     end
@@ -32,7 +33,8 @@ function db.load()
                 allowUserWithdraw = true,
                 allowUserDeposit = true
             },
-            thresholds = {}
+            thresholds = {},
+            logs = {}
         }
         db.save() -- Сразу сохраняем стандартные настройки
     end
@@ -124,6 +126,35 @@ function db.setThreshold(itemName, itemLabel, minAmount)
     end
     db.save()
     return true
+end
+
+-- Добавить запись в лог операций (свежие сверху, максимум 200)
+function db.addLog(player, action, item, amount)
+    if not data then return end
+    if not data.logs then data.logs = {} end
+    
+    local okT, t = pcall(os.time)
+    local time = (okT and tonumber(t)) or 0
+    local entry = {
+        time = time,
+        player = player or "Unknown",
+        action = action, -- "take" (взял) или "put" (сдал)
+        item = item or "Unknown",
+        amount = amount or 0
+    }
+    
+    table.insert(data.logs, 1, entry) -- свежие сверху
+    if #data.logs > 200 then
+        table.remove(data.logs)
+    end
+    db.save()
+end
+
+-- Получить массив логов (свежие первыми)
+function db.getLogs()
+    if not data then return {} end
+    if not data.logs then data.logs = {} end
+    return data.logs
 end
 
 return db

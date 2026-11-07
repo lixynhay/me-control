@@ -36,6 +36,7 @@ function ui.getTabs(isAdmin)
         { id = "MON",   label = " Монитор " }
     }
     if isAdmin then
+        table.insert(tabs, { id = "LOGS",  label = " Логи " })
         table.insert(tabs, { id = "ADMIN", label = " Админ " })
     end
     return tabs
@@ -125,7 +126,10 @@ function ui.drawMain(W, H, state)
     end
     ui.drawButton(bottom.exit.x, H - 2, bottom.exit.w, "ВЫХОД", false)
     
-    if state.currentTab == "ADMIN" then
+    if state.currentTab == "LOGS" then
+        ui.drawLogs(W, H, state.logs or {}, state.logsPage or 1, state.logsTotalPages or 1)
+        return
+    elseif state.currentTab == "ADMIN" then
         ui.drawAdmin(W, H, state.adminList)
         return
     elseif state.currentTab == "STATS" then
@@ -240,6 +244,42 @@ function ui.drawMonitor(W, H, statusList)
     
     gpu.setForeground(C.muted)
     gpu.set(3, H - 4, "Автообновление включено (каждые 2 сек)")
+end
+
+function ui.drawLogs(W, H, logs, page, totalPages)
+    ui.drawFrame(2, 4, W - 3, H - 8, C.border)
+    gpu.setForeground(C.title)
+    local title = "--- Логи операций ---"
+    gpu.set(math.floor((W - unicode.len(title)) / 2) + 1, 4, title)
+    
+    if #logs == 0 then
+        gpu.setForeground(C.muted)
+        gpu.set(3, 6, "Записей пока нет.")
+    else
+        local perPage = H - 10
+        local startIdx = (page - 1) * perPage + 1
+        local endIdx = math.min(page * perPage, #logs)
+        local maxL = W - 6
+        for i = startIdx, endIdx do
+            local e = logs[i]
+            local rowY = 5 + (i - startIdx)
+            local ts = tostring(e.time or 0)
+            if e.time and e.time > 0 and os.date then
+                local okD, d = pcall(os.date, "%H:%M:%S", e.time)
+                if okD and d then ts = d end
+            end
+            local act = (e.action == "take") and "Взял" or "Сдал"
+            local line = ts .. " | " .. tostring(e.player or "?") .. " | " ..
+                         act .. " " .. tostring(e.amount or 0) .. " шт. " .. tostring(e.item or "?")
+            if unicode.len(line) > maxL then line = unicode.sub(line, 1, maxL - 3) .. "..." end
+            gpu.setForeground(C.fg)
+            gpu.set(3, rowY, line)
+        end
+    end
+    
+    gpu.setForeground(C.muted)
+    local pText = "Стр. " .. tostring(page) .. " из " .. tostring(totalPages)
+    gpu.set(W - unicode.len(pText) - 3, 4, pText)
 end
 
 function ui.drawStats(W, H, info)

@@ -40,7 +40,10 @@ local state = {
     lastAlertCheck = 0,
     searchQuery = "",
     isSearching = false,
-    originalItems = {}
+    originalItems = {},
+    logs = {},
+    logsPage = 1,
+    logsTotalPages = 1
 }
 
 local function setStatus(msg, isError)
@@ -94,6 +97,11 @@ local function updateList()
     elseif state.currentTab == "MON" then
         state.items = {}
         state.monitorStatus = api.getThresholdStatus()
+    elseif state.currentTab == "LOGS" then
+        state.items = {}
+        state.logs = db.getLogs()
+        state.logsTotalPages = math.max(1, math.ceil(#state.logs / (H - 10)))
+        if state.logsPage > state.logsTotalPages then state.logsPage = state.logsTotalPages end
     end
     
     -- Поиск/фильтр по названию (только для ME/INV)
@@ -262,9 +270,17 @@ while true do
         elseif not state.selectedItem and y == H - 2 then
             -- Нижняя панель: работает на всех вкладках (раскладка общая с ui)
             local bottom = ui.getBottomLayout(W)
-            if x >= bottom.prev.x and x < bottom.prev.x + bottom.prev.w then if state.page > 1 then state.page = state.page - 1; drawScreen() end end
+            if x >= bottom.prev.x and x < bottom.prev.x + bottom.prev.w then
+                if state.currentTab == "LOGS" then
+                    if state.logsPage > 1 then state.logsPage = state.logsPage - 1; drawScreen() end
+                elseif state.page > 1 then state.page = state.page - 1; drawScreen() end
+            end
             if x >= bottom.refresh.x and x < bottom.refresh.x + bottom.refresh.w then state.lastUpdate = 0; updateList(); drawScreen(); setStatus("Обновлено.") end
-            if x >= bottom.next.x and x < bottom.next.x + bottom.next.w then if state.page < state.totalPages then state.page = state.page + 1; drawScreen() end end
+            if x >= bottom.next.x and x < bottom.next.x + bottom.next.w then
+                if state.currentTab == "LOGS" then
+                    if state.logsPage < state.logsTotalPages then state.logsPage = state.logsPage + 1; drawScreen() end
+                elseif state.page < state.totalPages then state.page = state.page + 1; drawScreen() end
+            end
             if bottom.search and (state.currentTab == "ME" or state.currentTab == "INV") and x >= bottom.search.x and x < bottom.search.x + bottom.search.w then
                 state.isSearching = true
                 state.searchQuery = ""
