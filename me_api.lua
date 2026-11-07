@@ -332,6 +332,7 @@ function api.depositAll()
     if size == 0 then return 0, "Инвентарь пуст" end
     
     local totalBefore = getTotalNetworkCount()
+    local deposited = {} -- label -> count
     
     for slot = 1, size do
         local sOk, stack = pcall(function() return pim.getStackInSlot(slot) end)
@@ -340,12 +341,23 @@ function api.depositAll()
             local stackCount = stack.qty or stack.size or 0
             if stackCount > 0 then
                 local pOk, pushed = pcall(function() return pim.pushItem(config.side_push, slot, stackCount) end)
-                if pOk and tonumber(pushed) then moved = moved + tonumber(pushed) end
+                if pOk and tonumber(pushed) and tonumber(pushed) > 0 then
+                    local n = tonumber(pushed)
+                    moved = moved + n
+                    local lbl = stripColor(stack.display_name or stack.label or stack.name or "Неизвестный предмет")
+                    deposited[lbl] = (deposited[lbl] or 0) + n
+                end
             end
         end
     end
     if moved == 0 then
         return 0, "Нечего сдавать"
+    end
+    
+    -- Логируем массовую сдачу по каждому предмету
+    local player = getPimPlayer()
+    for lbl, n in pairs(deposited) do
+        db.addLog(player, "put", lbl, n)
     end
     
     -- Проверка: всё ли реально попало в МЭ
