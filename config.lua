@@ -2,7 +2,8 @@ local config = {}
 
 -- Направления
 config.side_export = "UP"   -- От МЭ к PIM
-config.side_push = "DOWN"   -- От PIM к МЭ
+config.side_push = "DOWN"   -- (устар.) От PIM к МЭ через pim.pushItem
+config.side_import = "DOWN" -- От PIM к МЭ (ME забирает предметы с этой стороны)
 
 -- Цветовая палитра
 config.colors = {

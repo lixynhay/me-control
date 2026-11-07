@@ -93,32 +93,42 @@ function api.exportToPlayer(item, amount)
     else return false, "МЭ отказала в выдаче (0 шт.)" end
 end
 
--- Забрать у игрока в МЭ
+-- Забрать у игрока в МЭ (через me.importItem, чтобы предметы не выбрасывались в мир)
 function api.pushFromPlayer(itemLabel, amount)
     local pim = component.pim
+    local me = component.me_interface
     local moved = 0
     local okSize, size = pcall(function() return pim.getInventorySize() end)
     if not okSize or not size then return false, "PIM недоступен" end
+    size = math.floor(tonumber(size) or 0)
+    if size == 0 then return false, "Инвентарь пуст" end
     
     for slot = 1, size do
         local sOk, stack = pcall(function() return pim.getStackInSlot(slot) end)
         if sOk and stack then
             -- Поддержка форматов OpenPeripheral (display_name / qty) и OC (label / size)
-            local stackLabel = stack.display_name or stack.label or stack.name
+            local stackLabel = stripColor(stack.display_name or stack.label or stack.name)
             local stackCount = stack.qty or stack.size or 0
-            if stackLabel == itemLabel then
-                local canMove = math.min(amount - moved, stackCount)
-                if canMove > 0 then
-                    local pOk, pushed = pcall(function() return pim.pushItem(config.side_push, slot, canMove) end)
-                    if pOk and pushed then moved = moved + pushed end
+            if stackLabel == itemLabel and stackCount > 0 then
+                local want = math.min(amount - moved, stackCount)
+                if want > 0 then
+                    local iOk, imported = pcall(function() return me.importItem(config.side_import, slot, want) end)
+                    if iOk and tonumber(imported) then
+                        moved = moved + tonumber(imported)
+                    end
                     if moved >= amount then break end
                 end
             end
         end
     end
     
-    if moved > 0 then return true, "Сдано: " .. moved .. " шт." 
-    else return false, "Предмет не найден в инвентаре" end
+    if moved >= amount then
+        return true, "Сдано: " .. moved .. " шт."
+    elseif moved > 0 then
+        return false, "МЭ приняла только " .. moved .. " из " .. amount .. " шт. Остальное осталось в инвентаре"
+    else
+        return false, "МЭ отказалась принимать " .. itemLabel .. ". Предмет остался в инвентаре"
+    end
 end
 
 -- Проверка наличия игрока
@@ -209,12 +219,15 @@ function api.getThresholdStatus()
     return list
 end
 
--- Сдать весь инвентарь игрока в МЭ
+-- Сдать весь инвентарь игрока в МЭ (через me.importItem)
 function api.depositAll()
     local pim = component.pim
+    local me = component.me_interface
     local moved = 0
     local okSize, size = pcall(function() return pim.getInventorySize() end)
     if not okSize or not size then return 0, "PIM недоступен" end
+    size = math.floor(tonumber(size) or 0)
+    if size == 0 then return 0, "Инвентарь пуст" end
     
     for slot = 1, size do
         local sOk, stack = pcall(function() return pim.getStackInSlot(slot) end)
@@ -222,15 +235,17 @@ function api.depositAll()
             -- Поддержка форматов OpenPeripheral (qty) и OC (size)
             local stackCount = stack.qty or stack.size or 0
             if stackCount > 0 then
-                local pOk, pushed = pcall(function() return pim.pushItem(config.side_push, slot, stackCount) end)
-                if pOk and pushed then moved = moved + pushed end
+                local iOk, imported = pcall(function() return me.importItem(config.side_import, slot, stackCount) end)
+                if iOk and tonumber(imported) then
+                    moved = moved + tonumber(imported)
+                end
             end
         end
     end
     if moved > 0 then
         return moved, "Сдано всё: " .. moved .. " шт."
     end
-    return 0, "Нечего сдавать"
+    return 0, "МЭ отказалась принимать предметы. Инвентарь не изменён"
 end
 
 -- Проверка: есть ли хотя бы один предмет со статусом «МАЛО»
