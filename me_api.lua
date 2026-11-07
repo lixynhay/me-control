@@ -106,18 +106,53 @@ function api.sortItems(items, mode)
     return items
 end
 
+-- Чистит текст ошибки Lua: убирает путь к файлу и номер строки.
+local function cleanError(err)
+    local msg = tostring(err or "неизвестная ошибка")
+    -- "C:\path\file.lua:27: text"  или  "file.lua:12: text"
+    local short = msg:match("^.-[\\/][^\\/]-:%d+:%s*(.+)$")
+    if not short then short = msg:match("^.-:%d+:%s*(.+)$") end
+    return short or msg
+end
+
 -- Список доступных крафтов (рецептов) в МЭ-сети.
 -- Каждый элемент: { label, display, name, damage, size, craftable }
 -- где craftable — исходный объект-рецепт (нужен для request()).
+--
+-- Диагностика: причина неудачи (если список пуст) пишется в _G.last_craft_error.
+-- Это удобно показывать в статус-баре и в test_craft.lua.
 function api.getCraftables()
+    _G.last_craft_error = nil
+
     local okMe, me = pcall(function() return component.me_interface end)
-    if not okMe or not me then return {} end
+    if not okMe then
+        _G.last_craft_error = "me_interface: " .. cleanError(me)
+        return {}
+    end
+    if not me then
+        _G.last_craft_error = "me_interface недоступен"
+        return {}
+    end
 
     local okFn, getCraftables = pcall(function() return me.getCraftables end)
-    if not okFn or type(getCraftables) ~= "function" then return {} end
+    if not okFn then
+        _G.last_craft_error = "getCraftables (доступ): " .. cleanError(getCraftables)
+        return {}
+    end
+    if type(getCraftables) ~= "function" then
+        _G.last_craft_error = "getCraftables отсутствует (тип: " .. type(getCraftables) .. ")"
+        return {}
+    end
 
     local okRaw, raw = pcall(function() return me.getCraftables() end)
-    if not okRaw or type(raw) ~= "table" then return {} end
+    if not okRaw then
+        _G.last_craft_error = "getCraftables: " .. cleanError(raw)
+        return {}
+    end
+    if type(raw) ~= "table" then
+        _G.last_craft_error = "getCraftables вернул " .. type(raw) .. " вместо table"
+        return {}
+    end
 
     -- Текущие количества в сети (одним запросом, чтобы показать «В сети:»)
     local counts = {}
@@ -132,6 +167,7 @@ function api.getCraftables()
     end
 
     local list = {}
+    local stackErrors = 0
     for _, c in pairs(raw) do
         if c then
             local okStack, stack = pcall(function() return c.getItemStack() end)
@@ -148,8 +184,15 @@ function api.getCraftables()
                     size = counts[key] or 0,
                     craftable = c,
                 })
+            else
+                stackErrors = stackErrors + 1
             end
         end
+    end
+
+    -- Рецепты есть, но ни у одного не удалось прочитать getItemStack()
+    if #list == 0 and stackErrors > 0 then
+        _G.last_craft_error = "getItemStack() не сработал у всех " .. tostring(stackErrors) .. " рецептов"
     end
 
     table.sort(list, function(a, b)
@@ -180,10 +223,7 @@ function api.requestCraft(craftableObject, amount)
         return true, result
     end
     if not ok then
-        -- Убираем служебный префикс "файл:строка: " из сообщения об ошибке
-        local msg = tostring(result)
-        local short = msg:match("^.-:%d+:%s*(.+)$")
-        return false, short or msg
+        return false, cleanError(result)
     end
     return false, "МЭ отклонила запрос на крафт"
 end

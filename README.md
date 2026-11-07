@@ -25,6 +25,7 @@
    wget https://raw.githubusercontent.com/lixynhay/me-control/main/me_api.lua
    wget https://raw.githubusercontent.com/lixynhay/me-control/main/db.lua
    wget https://raw.githubusercontent.com/lixynhay/me-control/main/config.lua
+   wget https://raw.githubusercontent.com/lixynhay/me-control/main/test_craft.lua
    ```
 3. Запустите:
    ```bash
@@ -77,6 +78,21 @@ config.storage = {
 
 Если `me_interface` не поддерживает `getCraftables()`, список будет пустым —
 вкладка при этом не ломает панель.
+
+### Диагностика крафтов
+
+Если вкладка «Крафт» пустая, запустите отдельный скрипт:
+
+```bash
+test_craft.lua
+```
+
+Он покажет: есть ли `me_interface`, есть ли метод `getCraftables`, текст ошибки
+(если вызов падает), длину списка и структуру первых трёх рецептов
+(`name`, `label`, `damage`, `size`).
+
+Причина последней неудачи также сохраняется в `_G.last_craft_error`
+и выводится в статус-бар панели: `Крафты не найдены. Ошибка: …`.
 
 ## 📜 Лицензия
 MIT

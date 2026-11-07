@@ -156,6 +156,15 @@ local function updateList()
         state.totalPages = math.max(1, math.ceil(#state.craftables / (H - 10)))
         if state.craftPage > state.totalPages then state.craftPage = state.totalPages end
         if state.craftPage < 1 then state.craftPage = 1 end
+
+        -- Диагностика: пустой список крафтов не должен оставаться «немым»
+        if #state.craftables == 0 then
+            local errText = _G.last_craft_error
+            if not errText or errText == "" then
+                errText = "рецепты не найдены (МЭ пуста или нет шаблонов)"
+            end
+            setStatus("Крафты не найдены. Ошибка: " .. tostring(errText), true)
+        end
     elseif state.currentTab == "MON" then
         state.items = {}
         state.monitorStatus = api.getThresholdStatus()
