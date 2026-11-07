@@ -202,11 +202,15 @@ function ui.drawMain(W, H, state)
         local endIdx = math.min(state.page * (H - 10), #state.items)
         local maxL = W - 20
         for i = startIdx, endIdx do
+            local rowY = 5 + (i - startIdx)
+            gpu.setBackground((i % 2 == 0) and C.bg or C.row_alt)
+            gpu.fill(3, rowY, W - 5, 1, " ")
             local dLabel = state.items[i].label
             if unicode.len(dLabel) > maxL then dLabel = unicode.sub(dLabel, 1, maxL - 3) .. "..." end
             gpu.setForeground(C.fg)
-            gpu.set(3, 5 + (i - startIdx), dLabel .. string.rep(" ", maxL - unicode.len(dLabel)) .. " | " .. string.format("%8d", math.floor(state.items[i].size)))
+            gpu.set(3, rowY, dLabel .. string.rep(" ", maxL - unicode.len(dLabel)) .. " | " .. string.format("%8d", math.floor(state.items[i].size)))
         end
+        gpu.setBackground(C.bg)
     end
     gpu.setForeground(C.muted)
     local pText = "Стр. " .. state.page .. " из " .. state.totalPages
@@ -318,14 +322,27 @@ function ui.drawMonitor(W, H, statusList)
         for i, s in ipairs(statusList) do
             local rowY = 6 + i
             if rowY > H - 5 then break end
-            local label = s.label
+            local label = s.label or "?"
             if unicode.len(label) > maxL then label = unicode.sub(label, 1, maxL - 3) .. "..." end
             gpu.setForeground(C.fg)
             gpu.set(3, rowY, label)
-            gpu.setForeground(C.title)
-            gpu.set(W - 28, rowY, string.format("%d / %d", s.current, s.min))
-            gpu.setForeground(s.isOk and C.ok or C.err)
-            gpu.set(W - 12, rowY, s.isOk and "ОК" or "МАЛО")
+            local minv = tonumber(s.min) or 0
+            local curv = tonumber(s.current) or 0
+            if minv > 0 then
+                local pct = math.floor(curv / minv * 100)
+                if pct < 0 then pct = 0 end
+                if pct > 100 then pct = 100 end
+                local filled = math.floor(pct / 10)
+                if filled < 0 then filled = 0 end
+                if filled > 10 then filled = 10 end
+                local bar = "[" .. string.rep("█", filled) .. string.rep("░", 10 - filled) .. "]"
+                gpu.setForeground(s.isOk and C.ok or C.danger)
+                gpu.set(W - 26, rowY, bar)
+                gpu.set(W - 11, rowY, tostring(pct) .. "%")
+            else
+                gpu.setForeground(C.title)
+                gpu.set(W - 20, rowY, tostring(curv))
+            end
         end
     end
     
@@ -385,6 +402,8 @@ function ui.drawLogs(W, H, logs, page, totalPages)
         for i = startIdx, endIdx do
             local e = logs[i]
             local rowY = 5 + (i - startIdx)
+            gpu.setBackground((i % 2 == 0) and C.bg or C.row_alt)
+            gpu.fill(3, rowY, W - 5, 1, " ")
             local ts = tostring(e.time or 0)
             if e.time and e.time > 0 and os.date then
                 local okD, d = pcall(os.date, "%H:%M:%S", e.time)
@@ -397,6 +416,7 @@ function ui.drawLogs(W, H, logs, page, totalPages)
             gpu.setForeground(C.fg)
             gpu.set(3, rowY, line)
         end
+        gpu.setBackground(C.bg)
     end
     
     gpu.setForeground(C.muted)
@@ -420,11 +440,21 @@ function ui.drawStats(W, H, info)
     gpu.setForeground(C.ok)
     gpu.set(25, 9, tostring(info.totalTypes or 0))
     
-    if info.energyStored then
+    if info.energyStored ~= nil and info.energyMax and info.energyMax > 0 then
         gpu.setForeground(C.white)
         gpu.set(5, 11, "Энергия:")
         gpu.setForeground(C.ok)
         gpu.set(25, 11, string.format("%d / %d AE", info.energyStored, info.energyMax))
+        local pct = math.floor(info.energyStored / info.energyMax * 100)
+        if pct < 0 then pct = 0 end
+        if pct > 100 then pct = 100 end
+        local filled = math.floor(pct / 5) -- бар на 20 символов
+        if filled < 0 then filled = 0 end
+        if filled > 20 then filled = 20 end
+        local bar = "[" .. string.rep("█", filled) .. string.rep("░", 20 - filled) .. "]"
+        gpu.setForeground(pct >= 20 and C.ok or C.danger)
+        gpu.set(5, 12, bar .. " " .. tostring(pct) .. "%")
+        gpu.setForeground(C.fg)
     end
     
     if info.cpus then
