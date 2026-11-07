@@ -468,10 +468,10 @@ while true do
             
         elseif state.currentTab == "ADMIN" and state.isAdmin then
             -- Окно управления игроком (бан / роль)
-            local mw, mh = 50, 12
+            local mw, mh = 50, 15
             local mx, my = math.floor((W - mw) / 2) + 1, math.floor((H - mh) / 2) + 1
             if state.adminTarget then
-                if y == my + mh - 2 then
+                if y == my + mh - 3 then
                     if x >= mx + 2 and x < mx + 18 then
                         -- Открыть окно ввода причины бана
                         state.banTarget = state.adminTarget
