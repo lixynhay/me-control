@@ -57,6 +57,23 @@ function ui.getTabLayout(W, isAdmin)
     return layout
 end
 
+-- Раскладка нижней панели кнопок (общая для отрисовки и обработки кликов)
+function ui.getBottomLayout(W)
+    local L = {
+        prev    = { x = 5,  w = 12 },
+        refresh = { x = 19, w = 15 },
+        next    = { x = 36, w = 12 },
+        exit    = { x = W - 20, w = 15 }
+    }
+    -- «СДАТЬ ВСЁ» сразу после «>>», но не залезая на «ВЫХОД»
+    local dw = 15
+    local dx = L.next.x + L.next.w + 2
+    if dx + dw <= L.exit.x - 1 then
+        L.deposit = { x = dx, w = dw }
+    end
+    return L
+end
+
 function ui.drawTabs(W, currentTab, isAdmin)
     local layout = ui.getTabLayout(W, isAdmin)
     for _, tab in ipairs(layout) do
@@ -75,13 +92,14 @@ function ui.drawMain(W, H, state)
     ui.drawTabs(W, state.currentTab, state.isAdmin)
     
     -- Нижняя панель кнопок рисуется для всех вкладок (до ветвлений с return)
-    ui.drawButton(5, H - 2, 12, "<<", false)
-    ui.drawButton(19, H - 2, 15, "ОБНОВИТЬ", false)
-    ui.drawButton(36, H - 2, 12, ">>", false)
-    if state.currentTab == "INV" then
-        ui.drawButton(52, H - 2, 15, "СДАТЬ ВСЁ", false, 0xAA5500)
+    local bottom = ui.getBottomLayout(W)
+    ui.drawButton(bottom.prev.x, H - 2, bottom.prev.w, "<<", false)
+    ui.drawButton(bottom.refresh.x, H - 2, bottom.refresh.w, "ОБНОВИТЬ", false)
+    ui.drawButton(bottom.next.x, H - 2, bottom.next.w, ">>", false)
+    if state.currentTab == "INV" and bottom.deposit then
+        ui.drawButton(bottom.deposit.x, H - 2, bottom.deposit.w, "СДАТЬ ВСЁ", false, C.warning)
     end
-    ui.drawButton(W - 20, H - 2, 15, "ВЫХОД", false)
+    ui.drawButton(bottom.exit.x, H - 2, bottom.exit.w, "ВЫХОД", false)
     
     if state.currentTab == "ADMIN" then
         ui.drawAdmin(W, H, state.adminList)
@@ -107,7 +125,7 @@ function ui.drawMain(W, H, state)
         gpu.setForeground(C.err)
         gpu.set(3, 6, "Встаньте на PIM для сканирования!")
     elseif #state.items == 0 then 
-        gpu.setForeground(0x888888)
+        gpu.setForeground(C.muted)
         gpu.set(3, 6, "Список пуст...")
     else
         local startIdx = (state.page - 1) * (H - 10) + 1
@@ -120,7 +138,7 @@ function ui.drawMain(W, H, state)
             gpu.set(3, 5 + (i - startIdx), dLabel .. string.rep(" ", maxL - unicode.len(dLabel)) .. " | " .. string.format("%8d", state.items[i].size))
         end
     end
-    gpu.setForeground(0x888888)
+    gpu.setForeground(C.muted)
     local pText = "Стр. " .. state.page .. " из " .. state.totalPages
     gpu.set(W - unicode.len(pText) - 3, 4, pText)
 end
@@ -148,7 +166,7 @@ function ui.drawAdmin(W, H, adminList)
         gpu.set(W - 20, 5 + i, data.role)
     end
     
-    gpu.setForeground(0x888888)
+    gpu.setForeground(C.muted)
     gpu.set(3, H - 4, "Кликните на игрока для смены роли: user -> admin -> banned")
 end
 
@@ -165,7 +183,7 @@ function ui.drawMonitor(W, H, statusList)
     gpu.set(W - 12, 5, "Статус")
     
     if #statusList == 0 then
-        gpu.setForeground(0x888888)
+        gpu.setForeground(C.muted)
         gpu.set(3, 7, "Нет настроенных лимитов.")
     else
         local maxL = math.max(10, W - 40)
@@ -183,7 +201,7 @@ function ui.drawMonitor(W, H, statusList)
         end
     end
     
-    gpu.setForeground(0x888888)
+    gpu.setForeground(C.muted)
     gpu.set(3, H - 4, "Автообновление включено (каждые 2 сек)")
 end
 
@@ -217,12 +235,12 @@ function ui.drawStats(W, H, info)
         gpu.set(25, 13, tostring(info.cpus))
     end
     
-    gpu.setForeground(0x888888)
-    gpu.set(5, H - 4, "Нажмите ОБНОВИТЬ для обновления данных.")
+    gpu.setForeground(C.muted)
+    gpu.set(5, H - 4, "Автообновление включено (каждые 2 сек)")
 end
 
 function ui.drawModal(W, H, item, qty, mode, canAction, isAdmin)
-    gpu.setBackground(0x000000)
+    gpu.setBackground(C.overlay)
     gpu.fill(1, 1, W, H, " ")
     local mw, mh = 56, 16
     local mx, my = math.floor((W - mw) / 2) + 1, math.floor((H - mh) / 2) + 1
@@ -249,12 +267,12 @@ function ui.drawModal(W, H, item, qty, mode, canAction, isAdmin)
     ui.drawButton(mx + 9, my + 9, 6, "-1", false)
     gpu.setForeground(C.ok)
     local q = tostring(qty) .. " шт."
-    gpu.set(mx + 17, my + 9, string.rep(" ", 10 - unicode.len(q)) .. q)
+    gpu.set(mx + 17, my + 9, string.rep(" ", math.max(0, 10 - unicode.len(q))) .. q)
     ui.drawButton(mx + 29, my + 9, 6, "+1", false)
     ui.drawButton(mx + 36, my + 9, 6, "+10", false)
     
     -- Кнопка действия (неактивна, если нет прав или игрока)
-    local btnBg = canAction and (mode == "ME" and C.ok or 0xAA5500) or 0x555555
+    local btnBg = canAction and (mode == "ME" and C.ok or C.warning) or C.disabled
     local btnText = mode == "ME" and "ЗАБРАТЬ" or "ПОЛОЖИТЬ"
     ui.drawButton(mx + 2, my + mh - 2, 18, btnText, false, btnBg)
     
@@ -262,10 +280,10 @@ function ui.drawModal(W, H, item, qty, mode, canAction, isAdmin)
     if isAdmin then
         local th = db.getThresholds()[item.name]
         local limText = "Лимит:" .. tostring(th and th.min or "Нет")
-        ui.drawButton(mx + mw - 20, my + mh - 3, 18, limText, false, 0x5555AA)
+        ui.drawButton(mx + mw - 20, my + mh - 3, 18, limText, false, C.limit)
     end
     
-    ui.drawButton(mx + mw - 14, my + mh - 2, 12, "ЗАКРЫТЬ", false, 0xAA0000)
+    ui.drawButton(mx + mw - 14, my + mh - 2, 12, "ЗАКРЫТЬ", false, C.danger)
 end
 
 return ui

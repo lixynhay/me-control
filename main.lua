@@ -151,18 +151,15 @@ while true do
                 state.currentTab = newTab
                 state.page = 1; state.selectedItem = nil
                 updateList(); drawScreen()
-                -- Временная отладка: сколько слотов видит PIM
-                if state.currentTab == "INV" and api.isPlayerPresent() then
-                    setStatus("Слотов в PIM: " .. tostring(component.pim.getInventorySize()))
-                end
             end
             
         elseif not state.selectedItem and y == H - 2 then
-            -- Нижняя панель: работает на всех вкладках
-            if x >= 5 and x < 17 then if state.page > 1 then state.page = state.page - 1; drawScreen() end end
-            if x >= 19 and x < 34 then state.lastUpdate = 0; updateList(); drawScreen(); setStatus("Обновлено.") end
-            if x >= 36 and x < 48 then if state.page < state.totalPages then state.page = state.page + 1; drawScreen() end end
-            if x >= 52 and x < 67 and state.currentTab == "INV" then
+            -- Нижняя панель: работает на всех вкладках (раскладка общая с ui)
+            local bottom = ui.getBottomLayout(W)
+            if x >= bottom.prev.x and x < bottom.prev.x + bottom.prev.w then if state.page > 1 then state.page = state.page - 1; drawScreen() end end
+            if x >= bottom.refresh.x and x < bottom.refresh.x + bottom.refresh.w then state.lastUpdate = 0; updateList(); drawScreen(); setStatus("Обновлено.") end
+            if x >= bottom.next.x and x < bottom.next.x + bottom.next.w then if state.page < state.totalPages then state.page = state.page + 1; drawScreen() end end
+            if state.currentTab == "INV" and bottom.deposit and x >= bottom.deposit.x and x < bottom.deposit.x + bottom.deposit.w then
                 if not api.isPlayerPresent() then
                     setStatus("Встаньте на PIM для сдачи!", true)
                 elseif not api.canDeposit(state.player) then
@@ -173,7 +170,7 @@ while true do
                     setStatus(msg, moved == 0)
                 end
             end
-            if x >= W - 20 and x < W - 5 then setStatus("Выход...", true); os.sleep(0.5); os.exit() end
+            if x >= bottom.exit.x and x < bottom.exit.x + bottom.exit.w then setStatus("Выход...", true); os.sleep(0.5); os.exit() end
             
         elseif state.currentTab == "ADMIN" and state.isAdmin then
             -- Клик по списку игроков в админке (только по строкам списка, не по нижней панели)
@@ -252,7 +249,7 @@ while true do
             
         else
             -- Клик по списку (навигация уже обработана выше)
-            if y >= 5 and y <= H - 5 and x >= 3 and x <= W - 3 then
+            if y >= 5 and y <= H - 6 and x >= 3 and x <= W - 3 then
                 local idx = (state.page - 1) * (H - 10) + (y - 4)
                 if (state.currentTab == "ME" or state.currentTab == "INV") and state.items[idx] then 
                     state.selectedItem = state.items[idx]

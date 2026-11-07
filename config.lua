@@ -10,7 +10,9 @@ config.colors = {
     btn = 0x333333, hover = 0x00AA00, white = 0xFFFFFF,
     ok = 0x00AA00, err = 0xFF5555, modal = 0x2A2A2A,
     tab_active = 0x0055AA, tab_inactive = 0x222222,
-    admin = 0xFFAA00, banned = 0xFF0000
+    admin = 0xFFAA00, banned = 0xFF0000,
+    muted = 0x888888, warning = 0xAA5500, danger = 0xAA0000,
+    disabled = 0x555555, limit = 0x5555AA, overlay = 0x000000
 }
 
 return config
