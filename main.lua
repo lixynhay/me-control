@@ -92,6 +92,7 @@ end
 
 updateList(); drawScreen()
 
+local success, err = pcall(function()
 while true do
     -- Ловим все события; фильтрация выполняется ниже по eventName
     local eventName, p1, p2, p3 = event.pull(0.1)
@@ -260,4 +261,15 @@ while true do
             end
         end
     end
+end
+end)
+
+-- Если произошла ошибка или выход, возвращаем экран в нормальное состояние
+gpu.setBackground(0x000000)
+gpu.setForeground(0xFFFFFF)
+gpu.fill(1, 1, W, H, " ")
+if not success then
+    print("Скрипт аварийно завершился: " .. tostring(err))
+else
+    print("Скрипт успешно завершен.")
 end
