@@ -4,6 +4,7 @@ package.loaded["me_api"] = nil
 package.loaded["db"] = nil
 package.loaded["config"] = nil
 package.loaded["locale"] = nil
+package.loaded["locale_generated"] = nil
 
 local component = require("component")
 local event = require("event")
