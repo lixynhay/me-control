@@ -15,4 +15,11 @@ config.colors = {
     disabled = 0x555555, limit = 0x5555AA, overlay = 0x000000
 }
 
+-- Оповещения
+config.alerts = {
+    sound = true,         -- Включить звук (пищалку)
+    redstone = true,      -- Включить сигнал редстоуна
+    redstoneSide = "BACK" -- Сторона, куда подключена лампа/сирена (замени на свою)
+}
+
 return config

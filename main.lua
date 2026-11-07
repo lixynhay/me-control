@@ -34,7 +34,9 @@ local state = {
     statusMsg = "", statusErr = false,
     networkInfo = {},
     monitorStatus = {},
-    lastUpdate = 0
+    lastUpdate = 0,
+    alertActive = false,
+    lastBeep = 0
 }
 
 local function setStatus(msg, isError)
@@ -100,6 +102,24 @@ updateList(); drawScreen()
 
 local success, err = pcall(function()
 while true do
+    -- Оповещения: есть ли предметы со статусом «МАЛО»
+    local alertActive = api.hasAlert()
+    state.alertActive = alertActive
+    
+    -- Звуковой сигнал (раз в 5 секунд, чтобы не бесить)
+    if alertActive and config.alerts.sound then
+        if computer.uptime() - (state.lastBeep or 0) > 5 then
+            computer.beep(1000, 0.1) -- Высокий писк
+            state.lastBeep = computer.uptime()
+        end
+    end
+    
+    -- Сигнал редстоуна (если компонент есть)
+    if component.isAvailable("redstone") and config.alerts.redstone then
+        local rs = component.redstone
+        rs.setOutput(config.alerts.redstoneSide, alertActive and 15 or 0)
+    end
+    
     -- Ловим все события; фильтрация выполняется ниже по eventName
     local eventName, p1, p2, p3 = event.pull(0.1)
     if eventName == "interrupted" then break end

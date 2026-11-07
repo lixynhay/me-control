@@ -88,7 +88,7 @@ end
 function ui.drawMain(W, H, state)
     gpu.setBackground(C.bg)
     gpu.fill(1, 1, W, H, " ")
-    ui.drawFrame(1, 1, W, H, C.border)
+    ui.drawFrame(1, 1, W, H, state.alertActive and C.danger or C.border)
     ui.drawTabs(W, state.currentTab, state.isAdmin)
     
     -- Нижняя панель кнопок рисуется для всех вкладок (до ветвлений с return)

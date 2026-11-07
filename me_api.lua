@@ -226,4 +226,13 @@ function api.depositAll()
     return 0, "Нечего сдавать"
 end
 
+-- Проверка: есть ли хотя бы один предмет со статусом «МАЛО»
+function api.hasAlert()
+    local status = api.getThresholdStatus()
+    for _, item in ipairs(status) do
+        if not item.isOk then return true end
+    end
+    return false
+end
+
 return api
