@@ -328,17 +328,25 @@ local function addStorageEntry(acc, cell)
 end
 
 -- Информация о хранилище МЭ (ячейки/диски): объём и количество типов.
--- В части версий OC у me_interface есть getCells()/getDrives(); если их нет,
--- оцениваем занятое по списку предметов сети (формула AE2: 8 предметов = 1 байт,
--- каждый тип = 8 байт). Точный общий объём без getCells() недоступен.
+--
+-- Как это работает:
+--   1) Если у me_interface есть getCells()/getDrives() — берём данные оттуда (точно).
+--   2) Если нет (типичный OC 1.7.10: в AE2-интеграции таких методов нет) —
+--      считаем ЗАНЯТОЕ по формуле AE2: 8 предметов = 1 байт, каждый тип = 8 байт
+--      (usedBytes = ceil(кол-во / 8) + типы * 8; сходится: 1k-ячейка = 8128 шт.).
+--      Это точное значение занятого, просто без общего объёма.
+--   3) Общий объём (ёмкость) можно задать вручную в config.storage.totalBytes —
+--      тогда в UI появится реальный процент заполнения.
 function api.getStorageInfo()
     local okMe, me = pcall(function() return component.me_interface end)
     if not okMe or not me then return nil end
 
+    local cfg = config.storage or {}
+
     local acc = { totalBytes = 0, usedBytes = 0, totalTypes = 0, usedTypes = 0 }
     local found = false
 
-    -- 1) Список ячеек сети (OC с интеграцией AE2, где метод реализован)
+    -- 1) Список ячеек сети (если сборка OC это умеет)
     local okCellsFn, cellsFn = pcall(function() return me.getCells end)
     if okCellsFn and type(cellsFn) == "function" then
         local ok, cells = pcall(function() return me.getCells() end)
@@ -360,28 +368,50 @@ function api.getStorageInfo()
         end
     end
 
+    -- Ручная ёмкость из config.lua. Если задана — она приоритетнее всего
+    -- (и для getCells, и для резервного расчёта): даёт точный процент.
+    local manualTotal = tonumber(cfg.totalBytes)
+    local manualTypes = tonumber(cfg.totalTypes)
+    local hasManual = manualTotal ~= nil and manualTotal > 0
+
+    local result
     if found and (acc.totalBytes > 0 or acc.totalTypes > 0) then
-        return acc
+        -- Данные от getCells()/getDrives() — точные
+        result = acc
+        result.estimated = false
+    else
+        -- Резерв: метода нет. Занятое считаем по предметам сети.
+        local items = api.getNetworkItems()
+        if type(items) ~= "table" or #items == 0 then
+            if not hasManual then return nil end
+            items = {}
+        end
+
+        local totalItems = 0
+        for _, it in ipairs(items) do
+            totalItems = totalItems + (tonumber(it.size) or 0)
+        end
+
+        local usedTypes = #items
+        result = {
+            totalBytes = nil,
+            usedBytes = math.ceil(totalItems / 8) + usedTypes * 8,
+            totalTypes = nil,
+            usedTypes = usedTypes,
+            -- true — ёмкость неизвестна, UI покажет только оценку занятого
+            estimated = true,
+        }
     end
 
-    -- 3) Резерв: метода нет (например, OC 1.7.10). Считаем занятое по предметам.
-    local items = api.getNetworkItems()
-    if type(items) ~= "table" or #items == 0 then return nil end
-
-    local totalItems = 0
-    for _, it in ipairs(items) do
-        totalItems = totalItems + (tonumber(it.size) or 0)
+    if hasManual then
+        result.totalBytes = manualTotal
+        result.estimated = false
     end
-    if totalItems <= 0 then return nil end
+    if manualTypes and manualTypes > 0 then
+        result.totalTypes = manualTypes
+    end
 
-    local usedTypes = #items
-    return {
-        totalBytes = nil,
-        usedBytes = math.ceil(totalItems / 8) + usedTypes * 8,
-        totalTypes = nil,
-        usedTypes = usedTypes,
-        estimated = true,
-    }
+    return result
 end
 
 -- Статус по лимитам: массив {label, current, min, isOk}, отсортирован по имени

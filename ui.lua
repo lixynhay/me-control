@@ -490,7 +490,8 @@ function ui.drawStats(W, H, info, storage)
         gpu.setForeground(C.white)
         gpu.set(5, y, "Диски (Байты):")
 
-        if totalBytes and totalBytes > 0 then
+        if totalBytes and totalBytes > 0 and storage.estimated ~= true then
+            -- Ёмкость известна: обычный прогресс-бар с процентами
             local pct = percentOf(usedBytes, totalBytes)
             local color = C.ok
             if pct > 95 then
@@ -502,11 +503,9 @@ function ui.drawStats(W, H, info, storage)
             gpu.set(5, y + 1, progressBar(pct, 20) .. " " .. tostring(pct) .. "%  " ..
                 formatSize(usedBytes) .. " / " .. formatSize(totalBytes))
         else
-            -- Ёмкость сети недоступна: показываем хотя бы занятое (оценка)
-            gpu.setForeground(storage.estimated and C.muted or C.ok)
-            local text = formatSize(usedBytes)
-            if storage.estimated then text = text .. " (оценка занятого)" end
-            gpu.set(5, y + 1, text)
+            -- Ёмкость неизвестна: показываем только занятое с пометкой «оценка»
+            gpu.setForeground(C.muted)
+            gpu.set(5, y + 1, formatSize(usedBytes) .. " (оценка занятого)")
         end
         y = y + 3
 
