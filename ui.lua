@@ -247,14 +247,16 @@ function ui.drawAdmin(W, H, adminList)
     gpu.set(3, H - 4, "Кликните на игрока для смены роли: user -> admin -> banned")
 end
 
--- Окно управления игроком в админке (бан / роль)
-function ui.drawAdminBan(W, H, name, role, banReason)
-    local mw, mh = 50, 15
-    local mx, my = math.floor((W - mw) / 2) + 1, math.floor((H - mh) / 2) + 1
-    gpu.setBackground(C.overlay)
+-- Окно управления игроком в админке (бан / роль) — геометрия 50x15
+function ui.drawAdminBan(W, H, targetName, text, role)
+    gpu.setBackground(0x000000)
     gpu.fill(1, 1, W, H, " ")
     
-    -- Окно: одна аккуратная рамка (без тени/внутренней рамки)
+    local mw, mh = 50, 15
+    local mx = math.floor((W - mw) / 2) + 1
+    local my = math.floor((H - mh) / 2) + 1
+    
+    -- Фон окна и одна аккуратная рамка (без тени/двойных линий)
     gpu.setBackground(C.modal)
     gpu.fill(mx, my, mw, mh, " ")
     gpu.setForeground(C.title)
@@ -265,35 +267,41 @@ function ui.drawAdminBan(W, H, name, role, banReason)
     end
     gpu.set(mx, my + mh - 1, "╚" .. string.rep("═", mw - 2) .. "╝")
     
-    -- Заголовок на my+2
+    -- Заголовок (на my+1, по центру)
     gpu.setForeground(C.title)
-    local t = "Игрок: " .. tostring(name)
-    if unicode.len(t) > mw - 6 then t = unicode.sub(t, 1, mw - 9) .. "..." end
-    gpu.set(mx + math.floor((mw - unicode.len(t)) / 2) + 1, my + 2, t)
+    local title = " Игрок: " .. tostring(targetName) .. " "
+    if unicode.len(title) > mw - 2 then title = unicode.sub(title, 1, mw - 5) .. "... " end
+    gpu.set(mx + math.floor((mw - unicode.len(title)) / 2) + 1, my + 1, title)
     
     -- Роль
-    gpu.setForeground(C.white); gpu.set(mx + 2, my + 4, "Роль:")
-    gpu.setForeground(C.ok); gpu.set(mx + 12, my + 4, tostring(role or "?"))
+    gpu.setForeground(C.white)
+    gpu.set(mx + 2, my + 3, "Роль:")
+    gpu.setForeground(C.ok)
+    gpu.set(mx + 10, my + 3, tostring(role or "techadmin"))
     
-    -- Причина бана: тёмная плашка
-    gpu.setForeground(C.white); gpu.set(mx + 2, my + 6, "Причина бана:")
+    -- Поле ввода причины
+    gpu.setForeground(C.white)
+    gpu.set(mx + 2, my + 6, "Причина бана:")
+    
+    -- Тёмная плашка под текст
     gpu.setBackground(0x111111)
     gpu.fill(mx + 2, my + 7, mw - 4, 1, " ")
-    gpu.setForeground(C.fg)
-    local br = tostring((banReason and banReason ~= "") and banReason or "—")
-    local maxw = mw - 6
-    if unicode.len(br) > maxw then br = unicode.sub(br, 1, maxw - 3) .. "..." end
-    gpu.set(mx + 3, my + 7, br)
-    gpu.setBackground(C.modal)
     
-    -- Кнопки на my+mh-3 (под ними пустая строка до рамки), равные отступы
-    local by = my + mh - 3
-    local bw1, bw2, bw3 = 16, 10, 12
-    local gap = math.floor(((mw - 4) - (bw1 + bw2 + bw3)) / 2) -- (46-38)/2 = 4
-    local bx = mx + 2
-    ui.drawButton(bx, by, bw1, "ЗАБАНИТЬ", false, C.danger)
-    ui.drawButton(bx + bw1 + gap, by, bw2, "РОЛЬ", false, C.limit)
-    ui.drawButton(bx + bw1 + gap + bw2 + gap, by, bw3, "ЗАКРЫТЬ", false, C.disabled)
+    gpu.setForeground(C.ok)
+    local displayText = tostring(text or "") .. "_"
+    if unicode.len(displayText) > mw - 5 then
+        displayText = unicode.sub(displayText, unicode.len(displayText) - (mw - 6), unicode.len(displayText))
+    end
+    gpu.set(mx + 3, my + 7, displayText)
+    
+    -- Кнопки (на my + mh - 3 = my + 12)
+    local btnY = my + mh - 3
+    gpu.setBackground(C.bg)
+    ui.drawButton(mx + 2, btnY, 16, "ЗАБАНИТЬ", false, C.danger)
+    ui.drawButton(mx + 20, btnY, 10, "РОЛЬ", false, C.limit)
+    ui.drawButton(mx + 32, btnY, 16, "ЗАКРЫТЬ", false, C.disabled)
+    gpu.setBackground(C.bg)
+    gpu.setForeground(C.fg)
 end
 
 -- Ввод причины бана с клавиатуры

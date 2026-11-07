@@ -158,7 +158,7 @@ local function drawScreen()
     -- Окно управления игроком (бан/роль) поверх админки
     if state.currentTab == "ADMIN" and state.adminTarget then
         local pd = db.getPlayer(state.adminTarget)
-        ui.drawAdminBan(W, H, state.adminTarget, pd and pd.role or "?", pd and pd.banReason or "")
+        ui.drawAdminBan(W, H, state.adminTarget, state.banReasonText or "", pd and pd.role or "?")
     end
     if state.isBanReasonInput then
         ui.drawBanReasonInput(W, H, state.banTarget, state.banReasonText)
@@ -289,7 +289,43 @@ while true do
         updateList(); drawScreen()
         
     elseif eventName == "key_down" then
-        if state.isBanReasonInput then
+        if state.adminTarget and state.currentTab == "ADMIN" then
+            local code = tonumber(p3) or 0
+            if code == 28 then
+                -- Enter: забанить навсегда с введённой причиной
+                local reason = state.banReasonText
+                if reason == "" then reason = "Без причины" end
+                local okB, bErr = db.banPlayer(state.player, state.adminTarget, reason, 0)
+                if okB then
+                    setStatus("Игрок " .. state.adminTarget .. " забанен навсегда")
+                else
+                    setStatus(tostring(bErr or "Не удалось забанить"), true)
+                end
+                state.adminTarget = nil
+                state.banReasonText = ""
+                updateList(); drawScreen()
+            elseif code == 1 then
+                -- Esc: закрыть окно
+                state.adminTarget = nil
+                state.banReasonText = ""
+                drawScreen()
+            elseif code == 14 then
+                local n = unicode.len(state.banReasonText)
+                if n > 0 then state.banReasonText = unicode.sub(state.banReasonText, 1, n - 1) end
+                drawScreen()
+            else
+                local ch
+                if type(p2) == "number" and p2 > 0 then
+                    ch = unicode.char(p2)
+                elseif type(p2) == "string" and unicode.len(p2) == 1 then
+                    ch = p2
+                end
+                if ch and ch ~= "" then
+                    state.banReasonText = state.banReasonText .. ch
+                    drawScreen()
+                end
+            end
+        elseif state.isBanReasonInput then
             local code = tonumber(p3) or 0
             if code == 28 then
                 -- Enter: забанить навсегда с введённой причиной
@@ -473,13 +509,19 @@ while true do
             if state.adminTarget then
                 if y == my + mh - 3 then
                     if x >= mx + 2 and x < mx + 18 then
-                        -- Открыть окно ввода причины бана
-                        state.banTarget = state.adminTarget
-                        state.isBanReasonInput = true
-                        state.banReasonText = ""
+                        -- ЗАБАНИТЬ с введённой причиной (inline)
+                        local reason = state.banReasonText
+                        if reason == "" then reason = "Без причины" end
+                        local okB, bErr = db.banPlayer(state.player, state.adminTarget, reason, 0)
+                        if okB then
+                            setStatus("Игрок " .. state.adminTarget .. " забанен навсегда")
+                        else
+                            setStatus(tostring(bErr or "Не удалось забанить"), true)
+                        end
                         state.adminTarget = nil
-                        drawScreen()
-                    elseif x >= mx + 22 and x < mx + 32 then
+                        state.banReasonText = ""
+                        updateList(); drawScreen()
+                    elseif x >= mx + 20 and x < mx + 30 then
                         -- Сменить роль (цикл)
                         local pd = db.getPlayer(state.adminTarget)
                         if pd then
@@ -500,8 +542,9 @@ while true do
                             end
                         end
                         updateList(); drawScreen()
-                    elseif x >= mx + 36 and x < mx + 48 then
+                    elseif x >= mx + 32 and x < mx + 48 then
                         state.adminTarget = nil
+                        state.banReasonText = ""
                         drawScreen()
                     end
                 end
@@ -510,6 +553,7 @@ while true do
                 local row = y - 5
                 if y >= 6 and y <= H - 3 and row >= 1 and state.adminList[row] then
                     state.adminTarget = state.adminList[row].name
+                    state.banReasonText = ""
                     drawScreen()
                 end
             end
