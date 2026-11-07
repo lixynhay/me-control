@@ -119,7 +119,10 @@ function ui.drawMain(W, H, state)
     
     -- Индикатор текущего пользователя (кто стоит на PIM)
     local who
-    if state.currentPlayer then
+    if state.isTechAdmin then
+        who = "[ TechAdmin: lixynhay ]"
+        gpu.setForeground(C.techadmin)
+    elseif state.currentPlayer then
         who = "[ Пользователь: " .. tostring(state.currentPlayer) .. " ]"
         gpu.setForeground(C.ok)
     else
@@ -219,12 +222,15 @@ function ui.drawAdmin(W, H, adminList)
         gpu.setForeground(C.fg)
         gpu.set(3, 5 + i, name)
         
+        local roleText = tostring(data.role or "?")
+        if name == "lixynhay" then roleText = "techadmin" end
         local roleColor = C.fg
-        if data.role == "admin" then roleColor = C.admin end
-        if data.role == "banned" then roleColor = C.banned end
+        if roleText == "admin" then roleColor = C.admin end
+        if roleText == "techadmin" then roleColor = C.techadmin end
+        if roleText == "banned" then roleColor = C.banned end
         
         gpu.setForeground(roleColor)
-        gpu.set(W - 20, 5 + i, data.role)
+        gpu.set(W - 20, 5 + i, roleText)
     end
     
     gpu.setForeground(C.muted)
@@ -254,9 +260,36 @@ function ui.drawAdminBan(W, H, name, role, banReason)
     if unicode.len(br) > mw - 4 then br = unicode.sub(br, 1, mw - 7) .. "..." end
     gpu.set(mx + 2, my + 5, br)
     
-    ui.drawButton(mx + 2, my + mh - 2, 16, "ЗАБАНИТЬ 1ч", false, C.danger)
+    ui.drawButton(mx + 2, my + mh - 2, 16, "ЗАБАНИТЬ", false, C.danger)
     ui.drawButton(mx + 20, my + mh - 2, 10, "РОЛЬ", false, C.limit)
     ui.drawButton(mx + mw - 14, my + mh - 2, 12, "ЗАКРЫТЬ", false, C.disabled)
+end
+
+-- Ввод причины бана с клавиатуры
+function ui.drawBanReasonInput(W, H, targetName, text)
+    local mw, mh = 50, 10
+    local mx, my = math.floor((W - mw) / 2) + 1, math.floor((H - mh) / 2) + 1
+    gpu.setBackground(C.overlay)
+    gpu.fill(1, 1, W, H, " ")
+    gpu.setBackground(C.modal)
+    gpu.fill(mx, my, mw, mh, " ")
+    ui.drawFrame(mx, my, mw, mh, C.title)
+    
+    gpu.setForeground(C.title)
+    local t = " Бан игрока " .. tostring(targetName) .. " "
+    if unicode.len(t) > mw - 2 then t = unicode.sub(t, 1, mw - 5) .. "..." end
+    gpu.set(mx + math.floor((mw - unicode.len(t)) / 2) + 1, my, t)
+    
+    gpu.setForeground(C.white); gpu.set(mx + 2, my + 3, "Причина:")
+    gpu.setForeground(C.ok)
+    local field = tostring(text or "") .. "_"
+    if unicode.len(field) > mw - 6 then
+        field = "..." .. unicode.sub(field, unicode.len(field) - (mw - 9))
+    end
+    gpu.set(mx + 2, my + 4, field)
+    
+    gpu.setForeground(C.muted)
+    gpu.set(mx + 2, my + mh - 2, "Enter — забанить навсегда, Esc — отмена")
 end
 
 function ui.drawMonitor(W, H, statusList)

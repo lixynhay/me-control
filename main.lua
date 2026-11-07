@@ -47,7 +47,11 @@ local state = {
     lastBanCheck = 0,
     isBanned = false,
     banInfo = nil,
-    adminTarget = nil
+    adminTarget = nil,
+    isTechAdmin = false,
+    isBanReasonInput = false,
+    banReasonText = "",
+    banTarget = nil
 }
 
 local function setStatus(msg, isError)
@@ -133,6 +137,9 @@ local function drawScreen()
         local pd = db.getPlayer(state.adminTarget)
         ui.drawAdminBan(W, H, state.adminTarget, pd and pd.role or "?", pd and pd.banReason or "")
     end
+    if state.isBanReasonInput then
+        ui.drawBanReasonInput(W, H, state.banTarget, state.banReasonText)
+    end
     -- После отрисовки основного экрана принудительно рисуем статус, чтобы он не исчез
     gpu.setBackground(config.colors.bg)
     gpu.fill(1, H - 1, W, 1, " ")
@@ -146,7 +153,8 @@ if initialPlayer and initialPlayer ~= "" then
     state.currentPlayer = initialPlayer
     local pData = db.getPlayer(state.player)
     if pData then
-        state.isAdmin = (pData.role == "admin")
+        state.isAdmin = db.isAdmin(state.player)
+        state.isTechAdmin = (pData.role == "techadmin")
     end
     local banned, banInfo = db.checkBan(state.player)
     if banned then
@@ -220,7 +228,8 @@ while true do
             setStatus("С возвращением, " .. state.player)
         end
         
-        state.isAdmin = pData and (pData.role == "admin") or false
+        state.isAdmin = db.isAdmin(state.player)
+        state.isTechAdmin = pData and (pData.role == "techadmin") or false
         
         -- Проверка бана
         local banned, banInfo = db.checkBan(state.player)
@@ -245,6 +254,10 @@ while true do
         state.isBanned = false
         state.banInfo = nil
         state.adminTarget = nil
+        state.isTechAdmin = false
+        state.isBanReasonInput = false
+        state.banReasonText = ""
+        state.banTarget = nil
         state.currentTab = "ME"
         state.selectedItem = nil -- ИСПРАВЛЕНИЕ 4: Закрываем открытую карточку при уходе
         state.page = 1
@@ -252,7 +265,45 @@ while true do
         updateList(); drawScreen()
         
     elseif eventName == "key_down" then
-        if state.isSearching then
+        if state.isBanReasonInput then
+            local code = tonumber(p3) or 0
+            if code == 28 then
+                -- Enter: забанить навсегда с введённой причиной
+                local reason = state.banReasonText
+                if reason == "" then reason = "Без причины" end
+                local okB, bErr = db.banPlayer(state.player, state.banTarget, reason, 0)
+                if okB then
+                    setStatus("Игрок " .. tostring(state.banTarget) .. " забанен навсегда")
+                else
+                    setStatus(tostring(bErr or "Не удалось забанить"), true)
+                end
+                state.isBanReasonInput = false
+                state.banTarget = nil
+                state.banReasonText = ""
+                updateList(); drawScreen()
+            elseif code == 1 then
+                -- Esc: отмена
+                state.isBanReasonInput = false
+                state.banTarget = nil
+                state.banReasonText = ""
+                drawScreen()
+            elseif code == 14 then
+                local n = unicode.len(state.banReasonText)
+                if n > 0 then state.banReasonText = unicode.sub(state.banReasonText, 1, n - 1) end
+                drawScreen()
+            else
+                local ch
+                if type(p2) == "number" and p2 > 0 then
+                    ch = unicode.char(p2)
+                elseif type(p2) == "string" and unicode.len(p2) == 1 then
+                    ch = p2
+                end
+                if ch and ch ~= "" then
+                    state.banReasonText = state.banReasonText .. ch
+                    drawScreen()
+                end
+            end
+        elseif state.isSearching then
             local code = tonumber(p3) or 0
             if code == 28 or code == 1 then
                 -- Enter (28) — применить фильтр и выйти; Esc (1) — выйти и сбросить
@@ -296,6 +347,8 @@ while true do
         -- Забанен — все действия заблокированы (кроме ВЫХОД, обработанного выше)
         if state.isBanned then
             -- ничего не делаем
+        elseif state.isBanReasonInput then
+            -- ввод причины бана с клавиатуры: клики по панели игнорируем
         elseif state.currentPlayer == nil then
             setStatus("Встаньте на PIM для использования панели!", true)
         elseif clickPlayer ~= state.currentPlayer then
@@ -362,11 +415,12 @@ while true do
             if state.adminTarget then
                 if y == my + mh - 2 then
                     if x >= mx + 2 and x < mx + 18 then
-                        -- ЗАБАНИТЬ на 1 час
-                        db.banPlayer(state.adminTarget, "Эмуляция бана", 60)
-                        setStatus("Игрок " .. state.adminTarget .. " забанен на 1 час")
+                        -- Открыть окно ввода причины бана
+                        state.banTarget = state.adminTarget
+                        state.isBanReasonInput = true
+                        state.banReasonText = ""
                         state.adminTarget = nil
-                        updateList(); drawScreen()
+                        drawScreen()
                     elseif x >= mx + 20 and x < mx + 30 then
                         -- Сменить роль (цикл)
                         local pd = db.getPlayer(state.adminTarget)
@@ -375,12 +429,17 @@ while true do
                             if pd.role == "user" then newRole = "admin"
                             elseif pd.role == "admin" then newRole = "banned"
                             elseif pd.role == "banned" then newRole = "user" end
+                            local okR, rErr
                             if newRole == "banned" then
-                                db.banPlayer(state.adminTarget, "Эмуляция бана", 0)
+                                okR, rErr = db.banPlayer(state.player, state.adminTarget, "Эмуляция бана", 0)
                             else
-                                db.setRole(state.adminTarget, newRole)
+                                okR, rErr = db.setRole(state.player, state.adminTarget, newRole)
                             end
-                            setStatus("Роль " .. state.adminTarget .. " -> " .. newRole)
+                            if okR then
+                                setStatus("Роль " .. state.adminTarget .. " -> " .. newRole)
+                            else
+                                setStatus(tostring(rErr or "Не удалось изменить роль"), true)
+                            end
                         end
                         updateList(); drawScreen()
                     elseif x >= mx + mw - 14 and x < mx + mw - 2 then
