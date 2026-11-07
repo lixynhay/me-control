@@ -49,9 +49,7 @@ local state = {
     banInfo = nil,
     adminTarget = nil,
     isTechAdmin = false,
-    isBanReasonInput = false,
     banReasonText = "",
-    banTarget = nil,
     logSearchQuery = "",
     isLogSearching = false,
     originalLogs = {}
@@ -159,9 +157,6 @@ local function drawScreen()
     if state.currentTab == "ADMIN" and state.adminTarget then
         local pd = db.getPlayer(state.adminTarget)
         ui.drawAdminBan(W, H, state.adminTarget, state.banReasonText or "", pd and pd.role or "?")
-    end
-    if state.isBanReasonInput then
-        ui.drawBanReasonInput(W, H, state.banTarget, state.banReasonText)
     end
     -- После отрисовки основного экрана принудительно рисуем статус, чтобы он не исчез
     gpu.setBackground(config.colors.bg)
@@ -278,9 +273,7 @@ while true do
         state.banInfo = nil
         state.adminTarget = nil
         state.isTechAdmin = false
-        state.isBanReasonInput = false
         state.banReasonText = ""
-        state.banTarget = nil
         state.isLogSearching = false
         state.currentTab = "ME"
         state.selectedItem = nil -- ИСПРАВЛЕНИЕ 4: Закрываем открытую карточку при уходе
@@ -307,44 +300,6 @@ while true do
             elseif code == 1 then
                 -- Esc: закрыть окно
                 state.adminTarget = nil
-                state.banReasonText = ""
-                drawScreen()
-            elseif code == 14 then
-                local n = unicode.len(state.banReasonText)
-                if n > 0 then state.banReasonText = unicode.sub(state.banReasonText, 1, n - 1) end
-                drawScreen()
-            else
-                local ch
-                if type(p2) == "number" and p2 > 0 then
-                    ch = unicode.char(p2)
-                elseif type(p2) == "string" and unicode.len(p2) == 1 then
-                    ch = p2
-                end
-                if ch and ch ~= "" then
-                    state.banReasonText = state.banReasonText .. ch
-                    drawScreen()
-                end
-            end
-        elseif state.isBanReasonInput then
-            local code = tonumber(p3) or 0
-            if code == 28 then
-                -- Enter: забанить навсегда с введённой причиной
-                local reason = state.banReasonText
-                if reason == "" then reason = "Без причины" end
-                local okB, bErr = db.banPlayer(state.player, state.banTarget, reason, 0)
-                if okB then
-                    setStatus("Игрок " .. tostring(state.banTarget) .. " забанен навсегда")
-                else
-                    setStatus(tostring(bErr or "Не удалось забанить"), true)
-                end
-                state.isBanReasonInput = false
-                state.banTarget = nil
-                state.banReasonText = ""
-                updateList(); drawScreen()
-            elseif code == 1 then
-                -- Esc: отмена
-                state.isBanReasonInput = false
-                state.banTarget = nil
                 state.banReasonText = ""
                 drawScreen()
             elseif code == 14 then
@@ -434,8 +389,6 @@ while true do
         -- Забанен — все действия заблокированы (кроме ВЫХОД, обработанного выше)
         if state.isBanned then
             -- ничего не делаем
-        elseif state.isBanReasonInput then
-            -- ввод причины бана с клавиатуры: клики по панели игнорируем
         elseif state.currentPlayer == nil then
             setStatus("Встаньте на PIM для использования панели!", true)
         elseif clickPlayer ~= state.currentPlayer then

@@ -304,36 +304,6 @@ function ui.drawAdminBan(W, H, targetName, text, role)
     gpu.setForeground(C.fg)
 end
 
--- Ввод причины бана с клавиатуры
-function ui.drawBanReasonInput(W, H, targetName, text)
-    local mw, mh = 50, 10
-    local mx, my = math.floor((W - mw) / 2) + 1, math.floor((H - mh) / 2) + 1
-    gpu.setBackground(C.overlay)
-    gpu.fill(1, 1, W, H, " ")
-    gpu.setBackground(C.modal)
-    gpu.fill(mx, my, mw, mh, " ")
-    ui.drawFrame(mx, my, mw, mh, C.title)
-    
-    gpu.setForeground(C.title)
-    local t = " Бан игрока " .. tostring(targetName) .. " "
-    if unicode.len(t) > mw - 2 then t = unicode.sub(t, 1, mw - 5) .. "..." end
-    gpu.set(mx + math.floor((mw - unicode.len(t)) / 2) + 1, my, t)
-    
-    gpu.setForeground(C.white); gpu.set(mx + 2, my + 3, "Причина:")
-    gpu.setBackground(0x111111)
-    gpu.fill(mx + 2, my + 4, mw - 4, 1, " ")
-    gpu.setForeground(C.ok)
-    local field = tostring(text or "") .. "_"
-    if unicode.len(field) > mw - 6 then
-        field = "..." .. unicode.sub(field, unicode.len(field) - (mw - 9))
-    end
-    gpu.set(mx + 3, my + 4, field)
-    gpu.setBackground(C.modal)
-    
-    gpu.setForeground(C.muted)
-    gpu.set(mx + 2, my + mh - 2, "Enter — забанить навсегда, Esc — отмена")
-end
-
 function ui.drawMonitor(W, H, statusList)
     ui.drawFrame(2, 4, W - 3, H - 8, C.border)
     gpu.setForeground(C.title)
