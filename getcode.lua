@@ -3,7 +3,7 @@ local filesystem = require("filesystem")
 
 -- ================= НАСТРОЙКИ =================
 local USER = "lixynhay"
-local REPO = "OC-HiTech"
+local REPO = "me-control"
 local BRANCHES = {"main", "master"}
 local TARGET_DIR = "/home/"
 -- =============================================
@@ -37,7 +37,7 @@ local function downloadFile(url, dest)
 end
 
 -- 1. ПОИСК ВЕТКИ И ПОЛУЧЕНИЕ СПИСКА ФАЙЛОВ
-print("=== УСТАНОВЩИК OC-HiTech ===")
+print("=== УСТАНОВЩИК ME-Control ===")
 print("Подключение к GitHub API...")
 
 local filesToDownload = {}
