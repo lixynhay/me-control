@@ -106,6 +106,88 @@ function api.sortItems(items, mode)
     return items
 end
 
+-- Список доступных крафтов (рецептов) в МЭ-сети.
+-- Каждый элемент: { label, display, name, damage, size, craftable }
+-- где craftable — исходный объект-рецепт (нужен для request()).
+function api.getCraftables()
+    local okMe, me = pcall(function() return component.me_interface end)
+    if not okMe or not me then return {} end
+
+    local okFn, getCraftables = pcall(function() return me.getCraftables end)
+    if not okFn or type(getCraftables) ~= "function" then return {} end
+
+    local okRaw, raw = pcall(function() return me.getCraftables() end)
+    if not okRaw or type(raw) ~= "table" then return {} end
+
+    -- Текущие количества в сети (одним запросом, чтобы показать «В сети:»)
+    local counts = {}
+    local okItems, items = pcall(function() return me.getItemsInNetwork() end)
+    if okItems and type(items) == "table" then
+        for _, i in ipairs(items) do
+            if i and i.name then
+                local key = tostring(i.name) .. "@" .. tostring(tonumber(i.damage) or 0)
+                counts[key] = (counts[key] or 0) + (tonumber(i.size) or 0)
+            end
+        end
+    end
+
+    local list = {}
+    for _, c in pairs(raw) do
+        if c then
+            local okStack, stack = pcall(function() return c.getItemStack() end)
+            if okStack and type(stack) == "table" then
+                local label = stripColor(stack.label or stack.display_name or stack.name or "?")
+                local itemName = stack.name
+                local dmg = tonumber(stack.damage) or 0
+                local key = tostring(itemName) .. "@" .. tostring(dmg)
+                table.insert(list, {
+                    label = label,
+                    display = locale.getName(itemName, dmg, label),
+                    name = itemName,
+                    damage = dmg,
+                    size = counts[key] or 0,
+                    craftable = c,
+                })
+            end
+        end
+    end
+
+    table.sort(list, function(a, b)
+        local na = unicode.lower(tostring(a.display or a.label or ""))
+        local nb = unicode.lower(tostring(b.display or b.label or ""))
+        if na ~= nb then return na < nb end
+        return tostring(a.label or "") < tostring(b.label or "")
+    end)
+    return list
+end
+
+-- Отправить запрос на крафт. Принимает либо объект-рецепт, либо элемент списка.
+-- Возвращает: true, статус (userdata) | false, текст ошибки
+function api.requestCraft(craftableObject, amount)
+    local target = craftableObject
+    if type(target) == "table" and target.craftable ~= nil then
+        target = target.craftable
+    end
+    if target == nil then
+        return false, "Рецепт недоступен"
+    end
+
+    amount = math.floor(tonumber(amount) or 1)
+    if amount < 1 then amount = 1 end
+
+    local ok, result = pcall(function() return target.request(amount) end)
+    if ok and result ~= nil and result ~= false then
+        return true, result
+    end
+    if not ok then
+        -- Убираем служебный префикс "файл:строка: " из сообщения об ошибке
+        local msg = tostring(result)
+        local short = msg:match("^.-:%d+:%s*(.+)$")
+        return false, short or msg
+    end
+    return false, "МЭ отклонила запрос на крафт"
+end
+
 -- Получить предметы из МЭ
 function api.getNetworkItems()
     local me = component.me_interface

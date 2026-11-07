@@ -39,6 +39,8 @@ local state = {
     statusMsg = "", statusErr = false,
     networkInfo = {},
     storageInfo = nil,
+    craftables = {},
+    craftPage = 1,
     monitorStatus = {},
     lastUpdate = 0,
     alertActive = false,
@@ -63,6 +65,11 @@ local state = {
 }
 
 local function setStatus(msg, isError)
+    msg = tostring(msg or "")
+    -- Обрезаем длинные сообщения, чтобы не вылезали за экран
+    if unicode.len(msg) > W - 5 then
+        msg = unicode.sub(msg, 1, W - 8) .. "..."
+    end
     state.statusMsg = msg
     state.statusErr = isError
     -- Мгновенная отрисовка статуса (если drawScreen не будет вызван сразу)
@@ -143,6 +150,12 @@ local function updateList()
         state.networkInfo = api.getNetworkInfo()
         state.storageInfo = api.getStorageInfo()
         state.networkInfo.storage = state.storageInfo
+    elseif state.currentTab == "CRAFT" then
+        state.items = {}
+        state.craftables = api.getCraftables()
+        state.totalPages = math.max(1, math.ceil(#state.craftables / (H - 10)))
+        if state.craftPage > state.totalPages then state.craftPage = state.totalPages end
+        if state.craftPage < 1 then state.craftPage = 1 end
     elseif state.currentTab == "MON" then
         state.items = {}
         state.monitorStatus = api.getThresholdStatus()
@@ -160,7 +173,7 @@ local function updateList()
         state.originalItems = {}
     end
     
-    if state.currentTab ~= "ADMIN" then
+    if state.currentTab ~= "ADMIN" and state.currentTab ~= "CRAFT" then
         state.totalPages = math.max(1, math.ceil(#state.items / (H - 10)))
         if state.page > state.totalPages then state.page = state.totalPages end
     end
@@ -190,6 +203,7 @@ local function switchTab(tabId)
     if tabId == nil or tabId == state.currentTab then return false end
     state.currentTab = tabId
     state.page = 1
+    state.craftPage = 1
     state.selectedItem = nil
     state.adminTarget = nil
     state.banReasonText = ""
@@ -519,12 +533,16 @@ while true do
             if x >= bottom.prev.x and x < bottom.prev.x + bottom.prev.w then
                 if state.currentTab == "LOGS" then
                     if state.logsPage > 1 then state.logsPage = state.logsPage - 1; drawScreen() end
+                elseif state.currentTab == "CRAFT" then
+                    if state.craftPage > 1 then state.craftPage = state.craftPage - 1; drawScreen() end
                 elseif state.page > 1 then state.page = state.page - 1; drawScreen() end
             end
             if x >= bottom.refresh.x and x < bottom.refresh.x + bottom.refresh.w then state.lastUpdate = 0; updateList(); drawScreen(); setStatus("Обновлено.") end
             if x >= bottom.next.x and x < bottom.next.x + bottom.next.w then
                 if state.currentTab == "LOGS" then
                     if state.logsPage < state.logsTotalPages then state.logsPage = state.logsPage + 1; drawScreen() end
+                elseif state.currentTab == "CRAFT" then
+                    if state.craftPage < state.totalPages then state.craftPage = state.craftPage + 1; drawScreen() end
                 elseif state.page < state.totalPages then state.page = state.page + 1; drawScreen() end
             end
             if bottom.search and x >= bottom.search.x and x < bottom.search.x + bottom.search.w then
@@ -610,38 +628,60 @@ while true do
         elseif state.selectedItem then
             local mw, mh = 56, 16
             local mx, my = math.floor((W - mw) / 2) + 1, math.floor((H - mh) / 2) + 1
-            
+            local isCraft = (state.currentTab == "CRAFT")
+            -- Для крафта «максимум» не ограничен количеством в сети
+            local maxQty = isCraft and 1000000 or (tonumber(state.selectedItem.size) or 0)
+
+            local function modalCanAct()
+                if isCraft then return true end
+                return (state.currentTab == "ME" and api.canWithdraw(state.player))
+                    or (state.currentTab == "INV" and api.canDeposit(state.player))
+            end
+
             -- Кнопки количества
             if y == my + 9 then
                 local old = state.quantity
                 if x >= mx + 2 and x < mx + 8 then state.quantity = math.max(1, state.quantity - 10) end
                 if x >= mx + 9 and x < mx + 15 then state.quantity = math.max(1, state.quantity - 1) end
-                if x >= mx + 29 and x < mx + 35 then state.quantity = math.min(state.selectedItem.size, state.quantity + 1) end
-                if x >= mx + 36 and x < mx + 42 then state.quantity = math.min(state.selectedItem.size, state.quantity + 10) end
+                if x >= mx + 29 and x < mx + 35 then state.quantity = math.min(maxQty, state.quantity + 1) end
+                if x >= mx + 36 and x < mx + 42 then state.quantity = math.min(maxQty, state.quantity + 10) end
+                if state.quantity < 1 then state.quantity = 1 end
                 if old ~= state.quantity then 
-                    local canAct = (state.currentTab == "ME" and api.canWithdraw(state.player)) or (state.currentTab == "INV" and api.canDeposit(state.player))
-                    ui.drawModal(W, H, state.selectedItem, state.quantity, state.currentTab, canAct, state.isAdmin) 
+                    ui.drawModal(W, H, state.selectedItem, state.quantity, state.currentTab, modalCanAct(), state.isAdmin) 
                 end
             end
             
             -- Кнопка действия
             if y == my + mh - 2 and x >= mx + 2 and x < mx + 20 then
-                if not state.player then
-                    setStatus("Ошибка: на PIM никого нет!", true)
-                elseif state.currentTab == "ME" and not api.canWithdraw(state.player) then
-                    setStatus("Вам запрещено забирать предметы!", true)
-                elseif state.currentTab == "INV" and not api.canDeposit(state.player) then
-                    setStatus("Вам запрещено сдавать предметы!", true)
-                else
-                    local ok, msg
-                    if state.currentTab == "ME" then
-                        ok, msg = api.exportToPlayer(state.selectedItem, state.quantity)
+                if isCraft then
+                    -- «СКРАФТИТЬ»
+                    local ok, res = api.requestCraft(state.selectedItem, state.quantity)
+                    if ok then
+                        setStatus("Запрос на крафт отправлен: " .. tostring(state.selectedItem.display or state.selectedItem.label)
+                            .. " x" .. tostring(state.quantity))
                     else
-                        ok, msg = api.pushFromPlayer(state.selectedItem, state.quantity)
+                        setStatus("Не удалось запросить крафт: " .. tostring(res), true)
                     end
-                    setStatus(msg, not ok)
+                    state.selectedItem = nil
+                    updateList(); drawScreen()
+                else
+                    if not state.player then
+                        setStatus("Ошибка: на PIM никого нет!", true)
+                    elseif state.currentTab == "ME" and not api.canWithdraw(state.player) then
+                        setStatus("Вам запрещено забирать предметы!", true)
+                    elseif state.currentTab == "INV" and not api.canDeposit(state.player) then
+                        setStatus("Вам запрещено сдавать предметы!", true)
+                    else
+                        local ok, msg
+                        if state.currentTab == "ME" then
+                            ok, msg = api.exportToPlayer(state.selectedItem, state.quantity)
+                        else
+                            ok, msg = api.pushFromPlayer(state.selectedItem, state.quantity)
+                        end
+                        setStatus(msg, not ok)
+                    end
+                    os.sleep(1.5); state.selectedItem = nil; updateList(); drawScreen()
                 end
-                os.sleep(1.5); state.selectedItem = nil; updateList(); drawScreen()
             end
             
             -- Закрыть
@@ -649,8 +689,8 @@ while true do
                 state.selectedItem = nil; drawScreen()
             end
             
-            -- Кнопка лимита (только админ): цикл 100 -> 1000 -> 10000 -> 100000 -> Нет
-            if state.isAdmin and y == my + mh - 3 and x >= mx + mw - 20 and x < mx + mw - 2 then
+            -- Кнопка лимита (только админ, не для крафта): цикл 100 -> 1000 -> 10000 -> 100000 -> Нет
+            if state.isAdmin and not isCraft and y == my + mh - 3 and x >= mx + mw - 20 and x < mx + mw - 2 then
                 local thresholds = db.getThresholds()
                 local cur = thresholds[state.selectedItem.name]
                 local curMin = cur and cur.min or nil
@@ -669,12 +709,22 @@ while true do
         else
             -- Клик по списку (навигация уже обработана выше)
             if y >= 5 and y <= H - 6 and x >= 3 and x <= W - 3 then
-                local idx = (state.page - 1) * (H - 10) + (y - 4)
-                if (state.currentTab == "ME" or state.currentTab == "INV") and state.items[idx] then 
-                    state.selectedItem = state.items[idx]
-                    state.quantity = 1
-                    local canAct = (state.currentTab == "ME" and api.canWithdraw(state.player)) or (state.currentTab == "INV" and api.canDeposit(state.player))
-                    ui.drawModal(W, H, state.selectedItem, state.quantity, state.currentTab, canAct, state.isAdmin) 
+                if state.currentTab == "CRAFT" then
+                    local idx = ((state.craftPage or 1) - 1) * (H - 10) + (y - 4)
+                    local entry = state.craftables[idx]
+                    if entry then
+                        state.selectedItem = entry
+                        state.quantity = 1
+                        ui.drawModal(W, H, entry, state.quantity, "CRAFT", true, state.isAdmin)
+                    end
+                else
+                    local idx = (state.page - 1) * (H - 10) + (y - 4)
+                    if (state.currentTab == "ME" or state.currentTab == "INV") and state.items[idx] then 
+                        state.selectedItem = state.items[idx]
+                        state.quantity = 1
+                        local canAct = (state.currentTab == "ME" and api.canWithdraw(state.player)) or (state.currentTab == "INV" and api.canDeposit(state.player))
+                        ui.drawModal(W, H, state.selectedItem, state.quantity, state.currentTab, canAct, state.isAdmin) 
+                    end
                 end
             end
         end

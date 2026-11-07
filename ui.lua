@@ -47,6 +47,7 @@ function ui.getTabs(isAdmin)
         { id = "ME",    label = " МЭ-сеть " },
         { id = "INV",   label = " Инвентарь " },
         { id = "STATS", label = " Статистика " },
+        { id = "CRAFT", label = " Крафт " },
         { id = "MON",   label = " Монитор " }
     }
     if isAdmin then
@@ -164,6 +165,9 @@ function ui.drawMain(W, H, state)
         return
     elseif state.currentTab == "STATS" then
         ui.drawStats(W, H, state.networkInfo or {}, state.storageInfo)
+        return
+    elseif state.currentTab == "CRAFT" then
+        ui.drawCraft(W, H, state.craftables or {}, state.craftPage or 1, state.totalPages or 1)
         return
     elseif state.currentTab == "MON" then
         ui.drawMonitor(W, H, state.monitorStatus or {})
@@ -541,7 +545,43 @@ function ui.drawStats(W, H, info, storage)
     gpu.set(5, H - 4, "Автообновление включено (каждые 2 сек)")
 end
 
+function ui.drawCraft(W, H, craftables, page, totalPages)
+    ui.drawFrame(2, 4, W - 3, H - 8, C.border)
+    gpu.setForeground(C.title)
+    local title = "--- Доступные крафты ---"
+    gpu.set(math.floor((W - unicode.len(title)) / 2) + 1, 4, title)
+
+    gpu.setForeground(C.muted)
+    local pText = "Стр. " .. tostring(page or 1) .. " из " .. tostring(totalPages or 1)
+    gpu.set(W - unicode.len(pText) - 3, 4, pText)
+
+    gpu.fill(2, 5, W - 3, H - 9, " ")
+    craftables = craftables or {}
+    if #craftables == 0 then
+        gpu.setForeground(C.muted)
+        gpu.set(3, 6, "Нет доступных рецептов...")
+        return
+    end
+
+    local perPage = H - 10
+    local startIdx = ((page or 1) - 1) * perPage + 1
+    local endIdx = math.min((page or 1) * perPage, #craftables)
+    local maxL = W - 6
+    for i = startIdx, endIdx do
+        local rowY = 5 + (i - startIdx)
+        gpu.setBackground((i % 2 == 0) and C.bg or C.row_alt)
+        gpu.fill(3, rowY, W - 5, 1, " ")
+        local label = craftables[i].display or craftables[i].label or "?"
+        if unicode.len(label) > maxL then label = unicode.sub(label, 1, maxL - 3) .. "..." end
+        gpu.setForeground(C.fg)
+        gpu.set(3, rowY, label)
+    end
+    gpu.setBackground(C.bg)
+    gpu.setForeground(C.fg)
+end
+
 function ui.drawModal(W, H, item, qty, mode, canAction, isAdmin)
+    local isCraft = (mode == "CRAFT")
     gpu.setBackground(C.overlay)
     gpu.fill(1, 1, W, H, " ")
     local mw, mh = 56, 16
@@ -552,8 +592,15 @@ function ui.drawModal(W, H, item, qty, mode, canAction, isAdmin)
     ui.drawFrame(mx, my, mw, mh, C.title)
     
     gpu.setForeground(C.title)
-    local t = " " .. (mode == "ME" and "Из МЭ" or "В МЭ") .. " "
-    gpu.set(mx + math.floor((mw - unicode.len(t)) / 2) + 1, my, t)
+    local titleText
+    if isCraft then
+        titleText = " Запрос на крафт "
+    elseif mode == "ME" then
+        titleText = " Из МЭ "
+    else
+        titleText = " В МЭ "
+    end
+    gpu.set(mx + math.floor((mw - unicode.len(titleText)) / 2) + 1, my, titleText)
     
     gpu.setForeground(C.white); gpu.set(mx + 2, my + 2, "Название:")
     gpu.setForeground(C.fg)
@@ -561,8 +608,11 @@ function ui.drawModal(W, H, item, qty, mode, canAction, isAdmin)
     if unicode.len(n) > mw - 4 then n = unicode.sub(n, 1, mw - 7) .. "..." end
     gpu.set(mx + 2, my + 3, n)
     
-    gpu.setForeground(C.white); gpu.set(mx + 2, my + 5, "Доступно:")
-    gpu.setForeground(C.ok); gpu.set(mx + 11, my + 5, tostring(item.size) .. " шт.")
+    -- «В сети:» для крафта, «Доступно:» для выдачи/сдачи
+    gpu.setForeground(C.white)
+    gpu.set(mx + 2, my + 5, isCraft and "В сети:" or "Доступно:")
+    gpu.setForeground(C.ok)
+    gpu.set(mx + 11, my + 5, tostring(item.size or 0) .. " шт.")
     
     gpu.setForeground(C.white); gpu.set(mx + 2, my + 7, "Количество:")
     ui.drawButton(mx + 2, my + 9, 6, "-10", false)
@@ -574,12 +624,21 @@ function ui.drawModal(W, H, item, qty, mode, canAction, isAdmin)
     ui.drawButton(mx + 36, my + 9, 6, "+10", false)
     
     -- Кнопка действия (неактивна, если нет прав или игрока)
-    local btnBg = canAction and (mode == "ME" and C.ok or C.warning) or C.disabled
-    local btnText = mode == "ME" and "ЗАБРАТЬ" or "ПОЛОЖИТЬ"
+    local btnText, btnBg
+    if isCraft then
+        btnText = "СКРАФТИТЬ"
+        btnBg = canAction and C.ok or C.disabled
+    elseif mode == "ME" then
+        btnText = "ЗАБРАТЬ"
+        btnBg = canAction and C.ok or C.disabled
+    else
+        btnText = "ПОЛОЖИТЬ"
+        btnBg = canAction and C.warning or C.disabled
+    end
     ui.drawButton(mx + 2, my + mh - 2, 18, btnText, false, btnBg)
     
-    -- Кнопка лимита (только для админа, над «ЗАКРЫТЬ»)
-    if isAdmin then
+    -- Кнопка лимита (только для админа, над «ЗАКРЫТЬ»; для крафта не нужна)
+    if isAdmin and not isCraft then
         local th = db.getThresholds()[item.name]
         local limText = "Лимит:" .. tostring(th and th.min or "Нет")
         ui.drawButton(mx + mw - 20, my + mh - 3, 18, limText, false, C.limit)
