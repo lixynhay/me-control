@@ -257,7 +257,7 @@ while true do
                 else
                     local moved, msg = api.depositAll()
                     updateList(); drawScreen()
-                    setStatus(msg, moved == 0)
+                    setStatus(msg, moved == 0 or (msg and msg:find("ВНИМАНИЕ", 1, true) ~= nil))
                 end
             end
             if x >= bottom.exit.x and x < bottom.exit.x + bottom.exit.w then setStatus("Выход...", true); os.sleep(0.5); break end

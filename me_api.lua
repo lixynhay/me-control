@@ -31,6 +31,16 @@ local function getNetworkCount(itemName, itemLabel)
     return 0
 end
 
+-- Общее количество предметов в МЭ (для агрегированной проверки сдачи)
+local function getTotalNetworkCount()
+    local me = component.me_interface
+    local ok, items = pcall(function() return me.getItemsInNetwork() end)
+    if not ok or type(items) ~= "table" then return nil end
+    local total = 0
+    for _, i in ipairs(items) do total = total + (i.size or 0) end
+    return total
+end
+
 -- Получить предметы из МЭ
 function api.getNetworkItems()
     local me = component.me_interface
@@ -86,7 +96,8 @@ function api.getPlayerInventory()
                         label = itemLabel, 
                         size = itemCount, 
                         name = itemName, 
-                        damage = itemDmg
+                        damage = itemDmg,
+                        fingerprint = stack.fingerprint
                     })
                 end
             end
@@ -116,6 +127,7 @@ end
 -- Забрать у игрока в МЭ через pim.pushItem + проверка на выпадение в мир
 function api.pushFromPlayer(item, amount)
     local pim = component.pim
+    local me = component.me_interface
     local itemLabel, itemName
     if type(item) == "table" then
         itemLabel = item.label or item.name
@@ -158,8 +170,21 @@ function api.pushFromPlayer(item, amount)
     -- Даём МЭ время обработать и сверяем количество
     os.sleep(0.5)
     local countAfter = getNetworkCount(itemName, itemLabel)
-    if countBefore ~= nil and countAfter ~= nil and (countAfter - countBefore) < moved then
-        return false, "ВНИМАНИЕ: Предмет выпал в мир! Подберите его!"
+    if countBefore ~= nil and countAfter ~= nil then
+        local accepted = countAfter - countBefore
+        if accepted < 0 then accepted = 0 end
+        local lost = moved - accepted
+        if lost > 0 then
+            -- Опционально: вернуть предмет обратно в PIM, если есть fingerprint
+            local fp = (type(item) == "table") and item.fingerprint or nil
+            if fp then
+                local eOk, exported = pcall(function() return me.exportItem(fp, config.side_export, lost, 0) end)
+                if eOk and tonumber(exported) and tonumber(exported) > 0 then
+                    return false, "Предмет возвращен в инвентарь (МЭ не приняла его)"
+                end
+            end
+            return false, "ВНИМАНИЕ: Предмет не попал в МЭ-сеть! Он остался в ME Interface. Заберите его оттуда вручную."
+        end
     end
 
     if moved >= amount then
@@ -265,6 +290,8 @@ function api.depositAll()
     size = math.floor(tonumber(size) or 0)
     if size == 0 then return 0, "Инвентарь пуст" end
     
+    local totalBefore = getTotalNetworkCount()
+    
     for slot = 1, size do
         local sOk, stack = pcall(function() return pim.getStackInSlot(slot) end)
         if sOk and stack then
@@ -276,10 +303,17 @@ function api.depositAll()
             end
         end
     end
-    if moved > 0 then
-        return moved, "Сдано всё: " .. moved .. " шт."
+    if moved == 0 then
+        return 0, "Нечего сдавать"
     end
-    return 0, "Нечего сдавать"
+    
+    -- Проверка: всё ли реально попало в МЭ
+    os.sleep(0.5)
+    local totalAfter = getTotalNetworkCount()
+    if totalBefore ~= nil and totalAfter ~= nil and (totalAfter - totalBefore) < moved then
+        return moved, "ВНИМАНИЕ: Некоторые предметы не попали в сеть! Заберите их из ME Interface вручную."
+    end
+    return moved, "Сдано всё: " .. moved .. " шт."
 end
 
 -- Проверка: есть ли хотя бы один предмет со статусом «МАЛО»
