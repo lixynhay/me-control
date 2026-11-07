@@ -20,13 +20,16 @@ if not component.isAvailable("me_interface") or not component.isAvailable("pim")
 end
 
 db.load()
-gpu.setResolution(gpu.maxResolution())
+pcall(function() gpu.setResolution(gpu.maxResolution()) end)
 
--- Принудительный инвертированный режим касания: прямой клик ПКМ = событие touch
-local screen = component.screen
-screen.setTouchModeInverted(true)
+-- Принудительный инвертированный режим касания (если экран это поддерживает)
+if component.isAvailable("screen") then
+    pcall(function() component.screen.setTouchModeInverted(true) end)
+end
 
-local W, H = gpu.getResolution()
+local okRes, resW, resH = pcall(function() return gpu.getResolution() end)
+local W = (okRes and tonumber(resW)) or 80
+local H = (okRes and tonumber(resH)) or 25
 
 local state = {
     items = {}, page = 1, totalPages = 1, selectedItem = nil, quantity = 1,
@@ -165,7 +168,11 @@ local function drawScreen()
     gpu.set(3, H - 1, state.statusMsg)
 end
 
-local initialPlayer = component.pim.getInventoryName()
+local initialPlayer
+if component.isAvailable("pim") then
+    local okIP, name = pcall(function() return component.pim.getInventoryName() end)
+    if okIP then initialPlayer = name end
+end
 if initialPlayer and initialPlayer ~= "" then
     state.player = initialPlayer
     state.currentPlayer = initialPlayer
