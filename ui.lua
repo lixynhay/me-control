@@ -57,7 +57,7 @@ function ui.drawMain(W, H, state)
     ui.drawTabs(W, state.currentTab, state.isAdmin)
     
     if state.currentTab == "ADMIN" then
-        ui.drawAdmin(W, H, state.adminPlayers)
+        ui.drawAdmin(W, H, state.adminList)
         return
     end
     
@@ -95,15 +95,17 @@ function ui.drawMain(W, H, state)
 end
 
 -- Админ панель (список игроков)
-function ui.drawAdmin(W, H, players)
+function ui.drawAdmin(W, H, adminList)
     ui.drawFrame(2, 4, W - 3, H - 8, C.border)
     gpu.setForeground(C.title)
     gpu.set(3, 5, "Никнейм")
     gpu.set(W - 20, 5, "Роль")
     
-    local i = 1
-    for name, data in pairs(players) do
+    for i, player in ipairs(adminList) do
         if i > H - 8 then break end
+        local name = player.name
+        local data = player.data
+        
         gpu.setForeground(C.fg)
         gpu.set(3, 5 + i, name)
         
@@ -113,7 +115,6 @@ function ui.drawAdmin(W, H, players)
         
         gpu.setForeground(roleColor)
         gpu.set(W - 20, 5 + i, data.role)
-        i = i + 1
     end
     
     gpu.setForeground(0x888888)
