@@ -1,6 +1,7 @@
 local component = require("component")
 local config = require("config")
 local db = require("db")
+local locale = require("locale")
 
 local api = {}
 
@@ -72,9 +73,11 @@ function api.getNetworkItems()
     if not ok or type(raw) ~= "table" then return {} end
     local list = {}
     for _, i in pairs(raw) do 
-        if i and i.label then 
+        if i and (i.label or i.name) then 
+            local lbl = i.label or i.name
             table.insert(list, {
-                label = i.label, 
+                label = lbl, 
+                display = locale.getName(i.name, i.damage, lbl),
                 size = i.size, 
                 name = i.name, 
                 damage = i.damage,
@@ -82,7 +85,7 @@ function api.getNetworkItems()
             }) 
         end 
     end
-    table.sort(list, function(a, b) return a.label < b.label end)
+    table.sort(list, function(a, b) return (a.display or a.label) < (b.display or b.label) end)
     return list
 end
 
@@ -118,6 +121,7 @@ function api.getPlayerInventory()
                 if not found then
                     table.insert(inv, {
                         label = itemLabel, 
+                        display = locale.getName(itemName, itemDmg, itemLabel),
                         size = itemCount, 
                         name = itemName, 
                         damage = itemDmg,
@@ -128,7 +132,7 @@ function api.getPlayerInventory()
         end
     end
     
-    table.sort(inv, function(a, b) return a.label < b.label end)
+    table.sort(inv, function(a, b) return (a.display or a.label) < (b.display or b.label) end)
     return inv
 end
 
@@ -158,7 +162,7 @@ function api.exportToPlayer(item, amount)
     if actuallyExported < 0 then actuallyExported = 0 end
     
     if actuallyExported > 0 then
-        db.addLog(getPimPlayer(), "take", item.label, actuallyExported)
+        db.addLog(getPimPlayer(), "take", item.display or item.label, actuallyExported)
         return true, "Выдано: " .. actuallyExported .. " шт."
     end
     return false, "МЭ отказала в выдаче (0 шт.)"
@@ -227,7 +231,7 @@ function api.pushFromPlayer(item, amount)
         end
     end
 
-    db.addLog(getPimPlayer(), "put", itemLabel, moved)
+    db.addLog(getPimPlayer(), "put", (type(item) == "table" and item.display) or itemLabel, moved)
     if moved >= amount then
         return true, "Сдано: " .. moved .. " шт."
     end
@@ -344,7 +348,8 @@ function api.depositAll()
                 if pOk and tonumber(pushed) and tonumber(pushed) > 0 then
                     local n = tonumber(pushed)
                     moved = moved + n
-                    local lbl = stripColor(stack.display_name or stack.label or stack.name or "Неизвестный предмет")
+                    local rawLbl = stripColor(stack.display_name or stack.label or stack.name or "Неизвестный предмет")
+                    local lbl = locale.getName(stack.id or stack.name, tonumber(stack.damage) or tonumber(stack.dmg) or 0, rawLbl)
                     deposited[lbl] = (deposited[lbl] or 0) + n
                 end
             end

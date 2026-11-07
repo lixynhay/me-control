@@ -205,7 +205,7 @@ function ui.drawMain(W, H, state)
             local rowY = 5 + (i - startIdx)
             gpu.setBackground((i % 2 == 0) and C.bg or C.row_alt)
             gpu.fill(3, rowY, W - 5, 1, " ")
-            local dLabel = state.items[i].label
+            local dLabel = state.items[i].display or state.items[i].label
             if unicode.len(dLabel) > maxL then dLabel = unicode.sub(dLabel, 1, maxL - 3) .. "..." end
             gpu.setForeground(C.fg)
             gpu.set(3, rowY, dLabel .. string.rep(" ", maxL - unicode.len(dLabel)) .. " | " .. string.format("%8d", math.floor(state.items[i].size)))
@@ -486,7 +486,7 @@ function ui.drawModal(W, H, item, qty, mode, canAction, isAdmin)
     
     gpu.setForeground(C.white); gpu.set(mx + 2, my + 2, "Название:")
     gpu.setForeground(C.fg)
-    local n = item.label
+    local n = item.display or item.label
     if unicode.len(n) > mw - 4 then n = unicode.sub(n, 1, mw - 7) .. "..." end
     gpu.set(mx + 2, my + 3, n)
     

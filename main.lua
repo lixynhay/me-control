@@ -3,6 +3,7 @@ package.loaded["ui"] = nil
 package.loaded["me_api"] = nil
 package.loaded["db"] = nil
 package.loaded["config"] = nil
+package.loaded["locale"] = nil
 
 local component = require("component")
 local event = require("event")
@@ -76,7 +77,8 @@ local function applySearchFilter()
         local q = unicode.lower(state.searchQuery)
         local filtered = {}
         for _, it in ipairs(state.originalItems) do
-            if unicode.lower(it.label or ""):find(q, 1, true) then
+            local hay = unicode.lower((it.display or "") .. "|" .. (it.label or ""))
+            if hay:find(q, 1, true) then
                 table.insert(filtered, it)
             end
         end
