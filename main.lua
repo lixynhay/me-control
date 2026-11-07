@@ -36,7 +36,8 @@ local state = {
     monitorStatus = {},
     lastUpdate = 0,
     alertActive = false,
-    lastBeep = 0
+    lastBeep = 0,
+    lastAlertCheck = 0
 }
 
 local function setStatus(msg, isError)
@@ -102,9 +103,12 @@ updateList(); drawScreen()
 
 local success, err = pcall(function()
 while true do
-    -- Оповещения: есть ли предметы со статусом «МАЛО»
-    local alertActive = api.hasAlert()
-    state.alertActive = alertActive
+    -- Оповещения: проверяем лимиты не чаще раза в секунду
+    if computer.uptime() - (state.lastAlertCheck or 0) > 1 then
+        state.alertActive = api.hasAlert()
+        state.lastAlertCheck = computer.uptime()
+    end
+    local alertActive = state.alertActive
     
     -- Звуковой сигнал (раз в 5 секунд, чтобы не бесить)
     if alertActive and config.alerts.sound then
