@@ -132,6 +132,7 @@ local function updateList()
         state.items = {}
         state.networkInfo = api.getNetworkInfo()
         state.storageInfo = api.getStorageInfo()
+        state.networkInfo.storage = state.storageInfo
     elseif state.currentTab == "MON" then
         state.items = {}
         state.monitorStatus = api.getThresholdStatus()

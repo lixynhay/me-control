@@ -493,7 +493,7 @@ function ui.drawStats(W, H, info, storage)
         if totalBytes and totalBytes > 0 then
             local pct = percentOf(usedBytes, totalBytes)
             local color = C.ok
-            if pct >= 95 then
+            if pct > 95 then
                 color = C.danger
             elseif pct >= 80 then
                 color = C.admin -- жёлтый/янтарный
