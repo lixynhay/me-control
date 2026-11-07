@@ -2,6 +2,7 @@ local component = require("component")
 local config = require("config")
 local db = require("db")
 local locale = require("locale")
+local unicode = require("unicode")
 
 local api = {}
 
@@ -64,6 +65,45 @@ local function getNetworkCountByStack(itemName, itemDamage)
         end
     end
     return total
+end
+
+-- Сортировка списка предметов.
+--   mode = "alpha" — по названию (А-Я), "desc" — по количеству убыв., "asc" — возр.
+-- Сортирует переданный список на месте и возвращает его же.
+local function itemName(entry)
+    if type(entry) ~= "table" then return "" end
+    local n = entry.display or entry.label or entry.name or ""
+    return unicode.lower(tostring(n))
+end
+
+local function itemSize(entry)
+    if type(entry) ~= "table" then return 0 end
+    return tonumber(entry.size) or 0
+end
+
+function api.sortItems(items, mode)
+    if type(items) ~= "table" then return items end
+    if mode == "desc" then
+        table.sort(items, function(a, b)
+            local sa, sb = itemSize(a), itemSize(b)
+            if sa ~= sb then return sa > sb end
+            return itemName(a) < itemName(b)
+        end)
+    elseif mode == "asc" then
+        table.sort(items, function(a, b)
+            local sa, sb = itemSize(a), itemSize(b)
+            if sa ~= sb then return sa < sb end
+            return itemName(a) < itemName(b)
+        end)
+    else
+        -- alpha (по умолчанию): по отображаемому имени, при равенстве — по количеству
+        table.sort(items, function(a, b)
+            local na, nb = itemName(a), itemName(b)
+            if na ~= nb then return na < nb end
+            return itemSize(a) > itemSize(b)
+        end)
+    end
+    return items
 end
 
 -- Получить предметы из МЭ

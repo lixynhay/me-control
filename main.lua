@@ -46,6 +46,7 @@ local state = {
     lastAlertCheck = 0,
     searchQuery = "",
     isSearching = false,
+    sortMode = "alpha",
     originalItems = {},
     logs = {},
     logsPage = 1,
@@ -71,10 +72,12 @@ local function setStatus(msg, isError)
     gpu.set(3, H - 1, msg)
 end
 
--- Применяет поисковый фильтр к уже загруженному списку (без повторного обращения к МЭ/PIM)
+-- Применяет поисковый фильтр к уже загруженному списку (без повторного обращения к МЭ/PIM).
+-- Сортировка применяется ПОСЛЕ фильтрации, иначе режимы конфликтуют.
 local function applySearchFilter()
+    local source
     if state.searchQuery == "" then
-        state.items = state.originalItems
+        source = state.originalItems
     else
         local q = unicode.lower(state.searchQuery)
         local filtered = {}
@@ -84,8 +87,15 @@ local function applySearchFilter()
                 table.insert(filtered, it)
             end
         end
-        state.items = filtered
+        source = filtered
     end
+
+    -- Копия, чтобы не менять порядок в originalItems
+    local list = {}
+    for i, it in ipairs(source) do list[i] = it end
+
+    state.items = api.sortItems(list, state.sortMode)
+
     state.totalPages = math.max(1, math.ceil(#state.items / (H - 10)))
     if state.page > state.totalPages then state.page = state.totalPages end
 end
@@ -430,6 +440,21 @@ while true do
                 updateList(); drawScreen()
             end
             
+        elseif not state.selectedItem and y == 4
+               and (state.currentTab == "ME" or state.currentTab == "INV") then
+            -- Клик по заголовку списка — переключение режима сортировки
+            if state.sortMode == "alpha" then
+                state.sortMode = "desc"
+            elseif state.sortMode == "desc" then
+                state.sortMode = "asc"
+            else
+                state.sortMode = "alpha"
+            end
+            state.page = 1
+            updateList(); drawScreen()
+            local names = { alpha = "А-Я", asc = "по возрастанию", desc = "по убыванию" }
+            setStatus("Сортировка: " .. (names[state.sortMode] or state.sortMode))
+
         elseif not state.selectedItem and y == H - 2 then
             -- Нижняя панель: работает на всех вкладках (раскладка общая с ui)
             local bottom = ui.getBottomLayout(W)

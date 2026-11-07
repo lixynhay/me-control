@@ -185,9 +185,18 @@ function ui.drawMain(W, H, state)
     
     ui.drawFrame(2, 4, W - 3, H - 8, C.border)
     
-    -- Заголовок списка
+    -- Заголовок списка с индикатором сортировки
     gpu.setForeground(C.title)
-    local title = state.currentTab == "ME" and "--- Сеть МЭ ---" or "--- Ваш Инвентарь ---"
+    local base = (state.currentTab == "ME") and "--- Сеть МЭ" or "--- Ваш Инвентарь"
+    local marker
+    if state.sortMode == "desc" then
+        marker = "[↓ Убыв.]"
+    elseif state.sortMode == "asc" then
+        marker = "[↑ Возр.]"
+    else
+        marker = "[А-Я]"
+    end
+    local title = base .. " " .. marker .. " ---"
     gpu.set(math.floor((W - unicode.len(title)) / 2) + 1, 4, title)
     
     -- Отрисовка списка
