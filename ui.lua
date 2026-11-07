@@ -257,20 +257,20 @@ function ui.drawAdminBan(W, H, name, role, banReason)
     gpu.fill(mx, my, mw, mh, " ")
     ui.drawFrame(mx, my, mw, mh, C.title)
     
-    -- Заголовок по центру верхней рамки (с пробелами по краям, как в drawModal)
+    -- Заголовок внутри рамки (строка my+1), с отступом
     gpu.setForeground(C.title)
     local t = " Игрок: " .. tostring(name) .. " "
-    if unicode.len(t) > mw - 2 then t = unicode.sub(t, 1, mw - 5) .. "..." end
-    gpu.set(mx + math.floor((mw - unicode.len(t)) / 2) + 1, my, t)
+    if unicode.len(t) > mw - 4 then t = unicode.sub(t, 1, mw - 7) .. "..." end
+    gpu.set(mx + math.floor((mw - unicode.len(t)) / 2) + 1, my + 1, t)
     
-    gpu.setForeground(C.white); gpu.set(mx + 2, my + 2, "Роль:")
-    gpu.setForeground(C.ok); gpu.set(mx + 11, my + 2, tostring(role or "?"))
+    gpu.setForeground(C.white); gpu.set(mx + 2, my + 3, "Роль:")
+    gpu.setForeground(C.ok); gpu.set(mx + 11, my + 3, tostring(role or "?"))
     
-    gpu.setForeground(C.white); gpu.set(mx + 2, my + 4, "Причина бана:")
+    gpu.setForeground(C.white); gpu.set(mx + 2, my + 5, "Причина бана:")
     gpu.setForeground(C.fg)
     local br = tostring((banReason and banReason ~= "") and banReason or "—")
     if unicode.len(br) > mw - 4 then br = unicode.sub(br, 1, mw - 7) .. "..." end
-    gpu.set(mx + 2, my + 5, br)
+    gpu.set(mx + 2, my + 6, br)
     
     -- Кнопки равномерно по ширине окна: 2 | 16 | 4 | 10 | 4 | 12 | = 48 из 50
     local bw1, bw2, bw3, gap = 16, 10, 12, 4

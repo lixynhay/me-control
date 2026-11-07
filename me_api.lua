@@ -49,6 +49,22 @@ local function getTotalNetworkCount()
     return total
 end
 
+-- Количество конкретного стека (name + damage) в МЭ
+local function getNetworkCountByStack(itemName, itemDamage)
+    if not itemName then return nil end
+    local me = component.me_interface
+    local ok, items = pcall(function() return me.getItemsInNetwork() end)
+    if not ok or type(items) ~= "table" then return nil end
+    local dmg = tonumber(itemDamage) or 0
+    local total = 0
+    for _, i in ipairs(items) do
+        if i.name == itemName and (tonumber(i.damage) or 0) == dmg then
+            total = total + (i.size or 0)
+        end
+    end
+    return total
+end
+
 -- Получить предметы из МЭ
 function api.getNetworkItems()
     local me = component.me_interface
@@ -116,30 +132,36 @@ function api.getPlayerInventory()
     return inv
 end
 
--- Выдать игроку из МЭ
+-- Выдать игроку из МЭ (проверка успеха по фактическому уменьшению в сети)
 function api.exportToPlayer(item, amount)
     local me = component.me_interface
     local realAmount = math.min(amount, item.size)
     if realAmount <= 0 then return false, "В МЭ нет предметов" end
     
-    local fp = item.fingerprint or {id = item.name, dmg = item.damage or 0}
+    local itemDamage = item.damage or 0
+    local countBefore = getNetworkCountByStack(item.name, itemDamage)
+    
+    local fp = item.fingerprint or {id = item.name, dmg = itemDamage}
     local ok, result = pcall(function()
         return me.exportItem(fp, config.side_export, realAmount, 0)
     end)
     if not ok then return false, "Ошибка API: " .. tostring(result) end
-    local exported = 0
-    if type(result) == "number" then
-        exported = result
-    elseif result == true then
-        exported = realAmount -- вернуло true: значит выдало всё, что просили
-    end
     
-    if exported > 0 then
-        db.addLog(getPimPlayer(), "take", item.label, exported)
-        return true, "Выдано: " .. exported .. " шт."
-    else
-        return false, "МЭ отказала в выдаче (0 шт.)"
+    -- Даём МЭ обновить данные и считаем фактическую выдачу
+    os.sleep(0.2)
+    local countAfter = getNetworkCountByStack(item.name, itemDamage)
+    
+    local actuallyExported = 0
+    if countBefore ~= nil and countAfter ~= nil then
+        actuallyExported = countBefore - countAfter
     end
+    if actuallyExported < 0 then actuallyExported = 0 end
+    
+    if actuallyExported > 0 then
+        db.addLog(getPimPlayer(), "take", item.label, actuallyExported)
+        return true, "Выдано: " .. actuallyExported .. " шт."
+    end
+    return false, "МЭ отказала в выдаче (0 шт.)"
 end
 
 -- Забрать у игрока в МЭ через pim.pushItem + проверка на выпадение в мир
