@@ -226,6 +226,12 @@ while true do
         -- ИСПРАВЛЕНИЕ 1: Для touch p2 - это X, p3 - это Y, p5 - имя игрока
         local x, y = p2, p3
         local clickPlayer = p5
+        
+        -- Кнопка «ВЫХОД» доступна всегда, даже без игрока на PIM или чужому клику
+        if y == H - 2 and x >= W - 20 and x < W - 5 then
+            setStatus("Выход...", true); os.sleep(0.5); break
+        end
+        
         -- Блокировка панели по игроку на PIM
         if state.currentPlayer == nil then
             setStatus("Встаньте на PIM для использования панели!", true)
