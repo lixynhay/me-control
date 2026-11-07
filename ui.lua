@@ -459,9 +459,9 @@ function ui.drawStats(W, H, info)
     
     if info.cpus then
         gpu.setForeground(C.white)
-        gpu.set(5, 13, "Сопроцессоров:")
+        gpu.set(5, 15, "Сопроцессоров:")
         gpu.setForeground(C.ok)
-        gpu.set(25, 13, tostring(info.cpus))
+        gpu.set(25, 15, tostring(info.cpus))
     end
     
     gpu.setForeground(C.muted)
