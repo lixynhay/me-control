@@ -184,6 +184,21 @@ local function drawScreen()
     gpu.set(3, H - 1, state.statusMsg)
 end
 
+-- Переключение вкладки: сброс страницы, выбранного предмета и открытых окон.
+-- Используется и кликами по вкладкам, и горячими клавишами F1–F6.
+local function switchTab(tabId)
+    if tabId == nil or tabId == state.currentTab then return false end
+    state.currentTab = tabId
+    state.page = 1
+    state.selectedItem = nil
+    state.adminTarget = nil
+    state.banReasonText = ""
+    state.isSearching = false
+    state.isLogSearching = false
+    updateList(); drawScreen()
+    return true
+end
+
 local initialPlayer
 if component.isAvailable("pim") then
     local okIP, name = pcall(function() return component.pim.getInventoryName() end)
@@ -203,6 +218,10 @@ if initialPlayer and initialPlayer ~= "" then
         state.banInfo = banInfo
     end
 end
+
+-- Подсказка о горячих клавишах при запуске
+state.statusMsg = "Подсказка: F1-F6 — вкладки, / — поиск."
+state.statusErr = false
 
 updateList(); drawScreen()
 
@@ -305,7 +324,49 @@ while true do
         updateList(); drawScreen()
         
     elseif eventName == "key_down" then
-        if state.adminTarget and state.currentTab == "ADMIN" then
+        local keyCode = tonumber(p3) or 0
+        local charCode = tonumber(p2) or 0
+
+        -- Коды клавиш из /lib/core/full_keyboard.lua OpenOS:
+        --   F1=59 (0x3B) … F6=64 (0x40), "/"=53 (0x35)
+        local function keyToTab(code)
+            if code == 59 then return "ME" end      -- F1
+            if code == 60 then return "INV" end     -- F2
+            if code == 61 then return "STATS" end   -- F3
+            if code == 62 then return "MON" end     -- F4
+            if code == 63 then return "LOGS" end    -- F5
+            if code == 64 then return "ADMIN" end   -- F6
+            return nil
+        end
+
+        -- Режимы ввода текста (там "/" — обычный символ, а не хоткей)
+        local typingText = state.isSearching or state.isLogSearching or (state.adminTarget ~= nil)
+        local hotkeyTab = keyToTab(keyCode)
+
+        if hotkeyTab then
+            -- F1–F6: переключение вкладок (работает в любом режиме)
+            local needsAdmin = (hotkeyTab == "LOGS" or hotkeyTab == "ADMIN")
+            if needsAdmin and not state.isAdmin then
+                setStatus("Вкладка доступна только администратору", true)
+            else
+                switchTab(hotkeyTab)
+            end
+
+        elseif (keyCode == 53 or charCode == 47) and not typingText then
+            -- «/» — быстрый поиск (аналог кнопки «ПОИСК»)
+            if state.currentTab == "LOGS" then
+                state.isLogSearching = true
+                state.logSearchQuery = ""
+                applyLogSearchFilter(); drawScreen()
+            elseif state.currentTab == "ME" or state.currentTab == "INV" then
+                state.isSearching = true
+                state.searchQuery = ""
+                applySearchFilter(); drawScreen()
+            else
+                setStatus("Поиск доступен на вкладках МЭ-сеть, Инвентарь и Логи", true)
+            end
+
+        elseif state.adminTarget and state.currentTab == "ADMIN" then
             local code = tonumber(p3) or 0
             if code == 28 then
                 -- Enter: забанить навсегда с введённой причиной
@@ -434,10 +495,7 @@ while true do
             end
             
             if newTab ~= state.currentTab then
-                state.currentTab = newTab
-                state.page = 1; state.selectedItem = nil
-                state.adminTarget = nil
-                updateList(); drawScreen()
+                switchTab(newTab)
             end
             
         elseif not state.selectedItem and y == 4
