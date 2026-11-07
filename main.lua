@@ -1,6 +1,7 @@
 local component = require("component")
 local event = require("event")
 local unicode = require("unicode")
+local computer = require("computer")
 local gpu = component.gpu
 
 local config = require("config")
@@ -24,7 +25,10 @@ local W, H = gpu.getResolution()
 local state = {
     items = {}, page = 1, totalPages = 1, selectedItem = nil, quantity = 1,
     currentTab = "ME", player = nil, isAdmin = false, adminList = {},
-    statusMsg = "", statusErr = false
+    statusMsg = "", statusErr = false,
+    networkInfo = {},
+    monitorStatus = {},
+    lastUpdate = 0
 }
 
 local function setStatus(msg, isError)
@@ -41,7 +45,11 @@ local function updateList()
     if state.currentTab == "ME" then
         state.items = api.getNetworkItems()
     elseif state.currentTab == "INV" then
-        state.items = api.getPlayerInventory()
+        if api.isPlayerPresent() then
+            state.items = api.getPlayerInventory()
+        else
+            state.items = {}
+        end
     elseif state.currentTab == "ADMIN" then
         -- Конвертируем таблицу в сортированный массив для стабильного отображения
         local raw = db.getAllPlayers()
@@ -50,6 +58,10 @@ local function updateList()
             table.insert(state.adminList, {name = name, data = data})
         end
         table.sort(state.adminList, function(a, b) return a.name < b.name end)
+    elseif state.currentTab == "STATS" then
+        state.networkInfo = api.getNetworkInfo()
+    elseif state.currentTab == "MON" then
+        state.monitorStatus = api.getThresholdStatus()
     end
     
     if state.currentTab ~= "ADMIN" then
@@ -73,6 +85,13 @@ while true do
     -- Ловим прерывание (Ctrl+C), чтобы скрипт можно было остановить
     local eventName, p1, p2, p3 = event.pull(0.05, "touch", "player_on", "player_off", "interrupted")
     if eventName == "interrupted" then os.exit() end
+    
+    -- Автообновление статистики и монитора раз в 2 секунды
+    if (state.currentTab == "STATS" or state.currentTab == "MON") and computer.uptime() - state.lastUpdate > 2 then
+        updateList()
+        drawScreen()
+        state.lastUpdate = computer.uptime()
+    end
     
     if eventName == "player_on" then
         state.player = tostring(p1)
@@ -104,25 +123,19 @@ while true do
     elseif eventName == "touch" then
         -- ИСПРАВЛЕНИЕ 1: Для touch p2 - это X, p3 - это Y
         local x, y = p2, p3
-        setStatus("DEBUG: Тач X=" .. tostring(x) .. " Y=" .. tostring(y))
         
         -- Переключение вкладок
         if y == 2 then
-            local t1, t2, t3 = " МЭ-сеть ", " Инвентарь ", " Админ "
-            local totalW = unicode.len(t1) + unicode.len(t2) + 4
-            if state.isAdmin then totalW = totalW + unicode.len(t3) + 2 end
-            local startX = math.floor((W - totalW) / 2) + 1
-            
+            local layout = ui.getTabLayout(W, state.isAdmin)
             local newTab = state.currentTab
-            if x >= startX and x < startX + unicode.len(t1) then
-                newTab = "ME"
-            elseif x >= startX + unicode.len(t1) + 2 and x < startX + unicode.len(t1) + unicode.len(t2) + 2 then
-                newTab = "INV"
-            elseif state.isAdmin and x >= startX + unicode.len(t1) + unicode.len(t2) + 4 and x < startX + totalW then
-                newTab = "ADMIN"
+            
+            for _, tab in ipairs(layout) do
+                if x >= tab.x and x < tab.x + tab.w then
+                    newTab = tab.id
+                    break
+                end
             end
             
-            -- ИСПРАВЛЕНИЕ 5: Реагируем только если вкладка реально изменилась
             if newTab ~= state.currentTab then
                 state.currentTab = newTab
                 state.page = 1; state.selectedItem = nil
@@ -158,7 +171,7 @@ while true do
                 if x >= mx + 36 and x < mx + 42 then state.quantity = math.min(state.selectedItem.size, state.quantity + 10) end
                 if old ~= state.quantity then 
                     local canAct = (state.currentTab == "ME" and api.canWithdraw(state.player)) or (state.currentTab == "INV" and api.canDeposit(state.player))
-                    ui.drawModal(W, H, state.selectedItem, state.quantity, state.currentTab, canAct) 
+                    ui.drawModal(W, H, state.selectedItem, state.quantity, state.currentTab, canAct, state.isAdmin) 
                 end
             end
             
@@ -187,13 +200,40 @@ while true do
                 state.selectedItem = nil; drawScreen()
             end
             
+            -- Кнопка лимита (только админ): цикл 100 -> 1000 -> 10000 -> 100000 -> Нет
+            if state.isAdmin and y == my + mh - 3 and x >= mx + mw - 20 and x < mx + mw - 2 then
+                local thresholds = db.getThresholds()
+                local cur = thresholds[state.selectedItem.name]
+                local curMin = cur and cur.min or nil
+                local newMin
+                if curMin == nil then newMin = 100
+                elseif curMin == 100 then newMin = 1000
+                elseif curMin == 1000 then newMin = 10000
+                elseif curMin == 10000 then newMin = 100000
+                else newMin = 0 end
+                
+                db.setThreshold(state.selectedItem.name, state.selectedItem.label, newMin)
+                local canAct = (state.currentTab == "ME" and api.canWithdraw(state.player)) or (state.currentTab == "INV" and api.canDeposit(state.player))
+                ui.drawModal(W, H, state.selectedItem, state.quantity, state.currentTab, canAct, state.isAdmin)
+            end
+            
         else
             -- Навигация и список
             local clicked = false
             if y == H - 2 then
                 if x >= 5 and x < 17 then clicked = true; if state.page > 1 then state.page = state.page - 1; drawScreen() end end
-                if x >= 19 and x < 34 then clicked = true; updateList(); drawScreen(); setStatus("Обновлено.") end
+                if x >= 19 and x < 34 then clicked = true; state.lastUpdate = 0; updateList(); drawScreen(); setStatus("Обновлено.") end
                 if x >= 36 and x < 48 then clicked = true; if state.page < state.totalPages then state.page = state.page + 1; drawScreen() end end
+                if x >= 52 and x < 67 and state.currentTab == "INV" then
+                    clicked = true
+                    if not api.isPlayerPresent() then
+                        setStatus("Встаньте на PIM для сдачи!", true)
+                    else
+                        local moved, msg = api.depositAll()
+                        updateList(); drawScreen()
+                        setStatus(msg, moved == 0)
+                    end
+                end
                 if x >= W - 20 and x < W - 5 then setStatus("Выход...", true); os.sleep(0.5); os.exit() end
             end
             
@@ -203,7 +243,7 @@ while true do
                     state.selectedItem = state.items[idx]
                     state.quantity = 1
                     local canAct = (state.currentTab == "ME" and api.canWithdraw(state.player)) or (state.currentTab == "INV" and api.canDeposit(state.player))
-                    ui.drawModal(W, H, state.selectedItem, state.quantity, state.currentTab, canAct) 
+                    ui.drawModal(W, H, state.selectedItem, state.quantity, state.currentTab, canAct, state.isAdmin) 
                 end
             end
         end

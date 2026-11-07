@@ -94,4 +94,76 @@ function api.canDeposit(playerName)
     return db.getConfig().allowUserDeposit ~= false
 end
 
+-- Получить информацию о МЭ-сети (для вкладки «Статистика»)
+function api.getNetworkInfo()
+    local info = { totalItems = 0, totalTypes = 0, energyStored = nil, energyMax = nil, cpus = nil }
+    
+    -- Считаем предметы
+    local items = me.getItemsInNetwork()
+    info.totalTypes = #items
+    for _, item in ipairs(items) do
+        info.totalItems = info.totalItems + item.size
+    end
+    
+    -- Пробуем получить энергию через me_controller
+    if component.isAvailable("me_controller") then
+        local ctrl = component.me_controller
+        info.energyStored = ctrl.getEnergyStored()
+        info.energyMax = ctrl.getMaxEnergyStored()
+    end
+    
+    -- Пробуем получить список сопроцессоров (если метод есть)
+    if me.getCpus then
+        local ok, cpus = pcall(me.getCpus)
+        if ok and cpus then
+            info.cpus = #cpus
+        end
+    end
+    
+    return info
+end
+
+-- Статус по лимитам: массив {label, current, min, isOk}, отсортирован по имени
+function api.getThresholdStatus()
+    local list = {}
+    local thresholds = db.getThresholds()
+    
+    -- Карта текущих количеств по имени предмета
+    local currentMap = {}
+    local items = me.getItemsInNetwork()
+    for _, item in ipairs(items) do
+        if item and item.name then
+            currentMap[item.name] = (currentMap[item.name] or 0) + item.size
+        end
+    end
+    
+    for name, th in pairs(thresholds) do
+        local current = currentMap[name] or 0
+        table.insert(list, {
+            label = th.label or name,
+            current = current,
+            min = th.min,
+            isOk = current >= th.min
+        })
+    end
+    
+    table.sort(list, function(a, b) return a.label < b.label end)
+    return list
+end
+
+-- Сдать весь инвентарь игрока в МЭ
+function api.depositAll()
+    local moved = 0
+    for slot = 1, pim.getInventorySize() do
+        local stack = pim.getStackInSlot(slot)
+        if stack and stack.size and stack.size > 0 then
+            moved = moved + pim.pushItem(config.side_push, slot, stack.size)
+        end
+    end
+    if moved > 0 then
+        return moved, "Сдано всё: " .. moved .. " шт."
+    end
+    return 0, "Нечего сдавать"
+end
+
 return api

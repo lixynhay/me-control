@@ -28,7 +28,8 @@ function db.load()
             config = {
                 allowUserWithdraw = true,
                 allowUserDeposit = true
-            }
+            },
+            thresholds = {}
         }
         db.save() -- Сразу сохраняем стандартные настройки
     end
@@ -99,6 +100,27 @@ function db.setConfig(key, value)
         data.config[key] = value
         db.save()
     end
+end
+
+-- Получить лимиты предметов
+function db.getThresholds()
+    if not data then return {} end
+    if not data.thresholds then data.thresholds = {} end
+    return data.thresholds
+end
+
+-- Установить лимит предмета: itemName -> {label, min}; minAmount == 0 удаляет лимит
+function db.setThreshold(itemName, itemLabel, minAmount)
+    if not data then return false end
+    if not data.thresholds then data.thresholds = {} end
+    if not itemName or itemName == "" then return false end
+    if minAmount == 0 then
+        data.thresholds[itemName] = nil
+    else
+        data.thresholds[itemName] = { label = itemLabel or itemName, min = minAmount }
+    end
+    db.save()
+    return true
 end
 
 return db
