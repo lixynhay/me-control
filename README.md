@@ -13,16 +13,19 @@
 * Красивый GUI с прогресс-барами и «зеброй».
 
 ## 🛠️ Установка
-1. Установите интернет-карту в компьютер.
-2. Выполните в консоли:
+1. Установите интернет-карту в компьютер (для загрузки файлов).
+2. Загрузите файлы проекта в `/home`:
    ```bash
-   wget https://raw.githubusercontent.com/lixynhay/me-control/main/getcode.lua
-   getcode.lua
+   wget https://raw.githubusercontent.com/lixynhay/me-control/main/main.lua
+   wget https://raw.githubusercontent.com/lixynhay/me-control/main/ui.lua
+   wget https://raw.githubusercontent.com/lixynhay/me-control/main/me_api.lua
+   wget https://raw.githubusercontent.com/lixynhay/me-control/main/db.lua
+   wget https://raw.githubusercontent.com/lixynhay/me-control/main/config.lua
+   ```
+3. Запустите:
+   ```bash
    main.lua
    ```
-
-> Примечание: `getcode.lua` — локальный бутстрап-установщик и не хранится в репозитории.
-> Если `wget` вернул ошибку, поместите `getcode.lua` на компьютер вручную и запустите его.
 
 ## 📜 Лицензия
 MIT
