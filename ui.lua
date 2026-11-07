@@ -203,34 +203,51 @@ function ui.drawMain(W, H, state)
     local title = base .. " " .. marker .. " ---"
     gpu.set(math.floor((W - unicode.len(title)) / 2) + 1, 4, title)
     
-    -- Отрисовка списка
-    gpu.fill(2, 5, W - 3, H - 9, " ")
+    -- Отрисовка списка (внутри рамки: x=3..W-3, рамка остаётся на x=2 и x=W-2)
+    gpu.fill(3, 5, W - 5, H - 10, " ")
     if state.currentTab == "INV" and not api.isPlayerPresent() then
         gpu.setForeground(C.err)
-        gpu.set(3, 6, "Встаньте на PIM для сканирования!")
+        gpu.set(4, 6, "Встаньте на PIM для сканирования!")
     elseif #state.items == 0 then 
         gpu.setForeground(C.muted)
-        gpu.set(3, 6, "Список пуст...")
+        gpu.set(4, 6, "Список пуст...")
     else
         local startIdx = (state.page - 1) * (H - 10) + 1
         local endIdx = math.min(state.page * (H - 10), #state.items)
-        local maxL = W - 22
+
+        -- Единая колонка начала строки: x=4 (1 пробел после рамки).
+        -- Под иконку всегда отведено 2 колонки (иконка + пробел), поэтому
+        -- названия и колонка количества выровнены и с иконкой, и без неё.
+        local textX = 4
+        local lineW = W - 7            -- от x=4 до x=W-4, 1 пробел до рамки
+        local countW = 11              -- " | " + 8 цифр
+        local maxL = lineW - countW - 2
+        if maxL < 8 then maxL = 8 end
+
         for i = startIdx, endIdx do
             local rowY = 5 + (i - startIdx)
             gpu.setBackground((i % 2 == 0) and C.bg or C.row_alt)
             gpu.fill(3, rowY, W - 5, 1, " ")
-            local dLabel = state.items[i].display or state.items[i].label
 
-            -- Цветовой маркер категории (слиток/руда/пыль/еда)
+            local dLabel = tostring(state.items[i].display or state.items[i].label or "?")
             local icon, iconColor = ui.getItemIcon(dLabel)
-            if icon then
-                gpu.setForeground(iconColor)
-                gpu.set(3, rowY, icon)
-            end
+            local prefix = icon and (icon .. " ") or "  "
 
             if unicode.len(dLabel) > maxL then dLabel = unicode.sub(dLabel, 1, maxL - 3) .. "..." end
+            local pad = maxL - unicode.len(dLabel)
+            if pad < 0 then pad = 0 end
+
+            -- Название, отступ и количество рисуются одной строкой с одного X
             gpu.setForeground(C.fg)
-            gpu.set(5, rowY, dLabel .. string.rep(" ", maxL - unicode.len(dLabel)) .. " | " .. string.format("%8d", math.floor(state.items[i].size)))
+            gpu.set(textX, rowY, prefix .. dLabel .. string.rep(" ", pad) ..
+                " | " .. string.format("%8d", math.floor(state.items[i].size or 0)))
+
+            -- Перекрашиваем только сам символ иконки: позиция уже занята
+            -- в строке, поэтому ничего не сдвигается и не налезает на рамку
+            if icon then
+                gpu.setForeground(iconColor)
+                gpu.set(textX, rowY, icon)
+            end
         end
         gpu.setBackground(C.bg)
     end
@@ -686,33 +703,42 @@ function ui.drawCraft(W, H, craftables, page, totalPages)
     local pText = "Стр. " .. tostring(page or 1) .. " из " .. tostring(totalPages or 1)
     gpu.set(W - unicode.len(pText) - 3, 4, pText)
 
-    gpu.fill(2, 5, W - 3, H - 9, " ")
+    gpu.fill(3, 5, W - 5, H - 10, " ")
     craftables = craftables or {}
     if #craftables == 0 then
         gpu.setForeground(C.muted)
-        gpu.set(3, 6, "Нет доступных рецептов...")
+        gpu.set(4, 6, "Нет доступных рецептов...")
         return
     end
 
     local perPage = H - 10
     local startIdx = ((page or 1) - 1) * perPage + 1
     local endIdx = math.min((page or 1) * perPage, #craftables)
+
+    -- Та же сетка, что и в основных списках: текст всегда с x=4,
+    -- под иконку зарезервированы 2 колонки.
+    local textX = 4
     local maxL = W - 8
+    if maxL < 8 then maxL = 8 end
+
     for i = startIdx, endIdx do
         local rowY = 5 + (i - startIdx)
         gpu.setBackground((i % 2 == 0) and C.bg or C.row_alt)
         gpu.fill(3, rowY, W - 5, 1, " ")
-        local label = craftables[i].display or craftables[i].label or "?"
+        local label = tostring(craftables[i].display or craftables[i].label or "?")
 
         local icon, iconColor = ui.getItemIcon(label)
-        if icon then
-            gpu.setForeground(iconColor)
-            gpu.set(3, rowY, icon)
-        end
+        local prefix = icon and (icon .. " ") or "  "
 
         if unicode.len(label) > maxL then label = unicode.sub(label, 1, maxL - 3) .. "..." end
+
         gpu.setForeground(C.fg)
-        gpu.set(5, rowY, label)
+        gpu.set(textX, rowY, prefix .. label)
+
+        if icon then
+            gpu.setForeground(iconColor)
+            gpu.set(textX, rowY, icon)
+        end
     end
     gpu.setBackground(C.bg)
     gpu.setForeground(C.fg)
