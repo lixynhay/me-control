@@ -207,11 +207,16 @@ while true do
                 local n = unicode.len(state.searchQuery)
                 if n > 0 then state.searchQuery = unicode.sub(state.searchQuery, 1, n - 1) end
                 applySearchFilter(); drawScreen()
-            elseif p2 and unicode.len(p2) == 1 then
-                -- Печатный символ (буква/цифра/пробел), включая кириллицу
-                local b = p2:byte()
-                if b and b >= 32 then
-                    state.searchQuery = state.searchQuery .. p2
+            else
+                -- p2 в key_down — КОД символа (число), а не строка; в старых версиях может быть строкой
+                local ch
+                if type(p2) == "number" and p2 > 0 then
+                    ch = unicode.char(p2)
+                elseif type(p2) == "string" and unicode.len(p2) == 1 then
+                    ch = p2
+                end
+                if ch and ch ~= "" then
+                    state.searchQuery = state.searchQuery .. ch
                     applySearchFilter(); drawScreen()
                 end
             end
