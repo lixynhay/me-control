@@ -96,7 +96,7 @@ local success, err = pcall(function()
 while true do
     -- Ловим все события; фильтрация выполняется ниже по eventName
     local eventName, p1, p2, p3 = event.pull(0.1)
-    if eventName == "interrupted" then os.exit() end
+    if eventName == "interrupted" then break end
     
     -- Автообновление статистики и монитора раз в 2 секунды (не трогаем открытую карточку)
     if state.selectedItem == nil and (state.currentTab == "STATS" or state.currentTab == "MON") and computer.uptime() - state.lastUpdate > 2 then
@@ -171,7 +171,7 @@ while true do
                     setStatus(msg, moved == 0)
                 end
             end
-            if x >= bottom.exit.x and x < bottom.exit.x + bottom.exit.w then setStatus("Выход...", true); os.sleep(0.5); os.exit() end
+            if x >= bottom.exit.x and x < bottom.exit.x + bottom.exit.w then setStatus("Выход...", true); os.sleep(0.5); break end
             
         elseif state.currentTab == "ADMIN" and state.isAdmin then
             -- Клик по списку игроков в админке (только по строкам списка, не по нижней панели)
