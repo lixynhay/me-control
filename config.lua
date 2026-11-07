@@ -1,5 +1,7 @@
 local config = {}
 
+config.version = "v0.5.0"
+
 -- Направления
 config.side_export = "UP"   -- От МЭ к PIM
 config.side_push = "DOWN"   -- От PIM к МЭ (pim.pushItem)

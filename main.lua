@@ -43,7 +43,10 @@ local state = {
     originalItems = {},
     logs = {},
     logsPage = 1,
-    logsTotalPages = 1
+    logsTotalPages = 1,
+    isBanned = false,
+    banInfo = nil,
+    adminTarget = nil
 }
 
 local function setStatus(msg, isError)
@@ -119,7 +122,16 @@ local function updateList()
 end
 
 local function drawScreen()
+    if state.isBanned then
+        ui.drawBannedScreen(W, H, state.banInfo)
+        return
+    end
     ui.drawMain(W, H, state)
+    -- Окно управления игроком (бан/роль) поверх админки
+    if state.currentTab == "ADMIN" and state.adminTarget then
+        local pd = db.getPlayer(state.adminTarget)
+        ui.drawAdminBan(W, H, state.adminTarget, pd and pd.role or "?", pd and pd.banReason or "")
+    end
     -- После отрисовки основного экрана принудительно рисуем статус, чтобы он не исчез
     gpu.setBackground(config.colors.bg)
     gpu.fill(1, H - 1, W, 1, " ")
@@ -134,6 +146,11 @@ if initialPlayer and initialPlayer ~= "" then
     local pData = db.getPlayer(state.player)
     if pData then
         state.isAdmin = (pData.role == "admin")
+    end
+    local banned, banInfo = db.checkBan(state.player)
+    if banned then
+        state.isBanned = true
+        state.banInfo = banInfo
     end
 end
 
@@ -186,16 +203,31 @@ while true do
             setStatus("С возвращением, " .. state.player)
         end
         
-        state.isAdmin = (pData.role == "admin")
-        if state.isAdmin then setStatus("Вы вошли как Админ.") end
+        state.isAdmin = pData and (pData.role == "admin") or false
         
-        state.currentTab = "ME"
-        updateList(); drawScreen()
+        -- Проверка бана
+        local banned, banInfo = db.checkBan(state.player)
+        if banned then
+            state.isBanned = true
+            state.banInfo = banInfo
+            state.selectedItem = nil
+            setStatus("Доступ запрещён", true)
+            drawScreen()
+        else
+            state.isBanned = false
+            state.banInfo = nil
+            if state.isAdmin then setStatus("Вы вошли как Админ.") end
+            state.currentTab = "ME"
+            updateList(); drawScreen()
+        end
         
     elseif eventName == "player_off" then
         state.player = nil
         state.currentPlayer = nil
         state.isAdmin = false
+        state.isBanned = false
+        state.banInfo = nil
+        state.adminTarget = nil
         state.currentTab = "ME"
         state.selectedItem = nil -- ИСПРАВЛЕНИЕ 4: Закрываем открытую карточку при уходе
         state.page = 1
@@ -240,8 +272,10 @@ while true do
             setStatus("Выход...", true); os.sleep(0.5); break
         end
         
-        -- Блокировка панели по игроку на PIM
-        if state.currentPlayer == nil then
+        -- Забанен — все действия заблокированы (кроме ВЫХОД, обработанного выше)
+        if state.isBanned then
+            -- ничего не делаем
+        elseif state.currentPlayer == nil then
             setStatus("Встаньте на PIM для использования панели!", true)
         elseif clickPlayer ~= state.currentPlayer then
             setStatus("Панель занята игроком " .. tostring(state.currentPlayer), true)
@@ -264,6 +298,7 @@ while true do
             if newTab ~= state.currentTab then
                 state.currentTab = newTab
                 state.page = 1; state.selectedItem = nil
+                state.adminTarget = nil
                 updateList(); drawScreen()
             end
             
@@ -300,19 +335,45 @@ while true do
             if x >= bottom.exit.x and x < bottom.exit.x + bottom.exit.w then setStatus("Выход...", true); os.sleep(0.5); break end
             
         elseif state.currentTab == "ADMIN" and state.isAdmin then
-            -- Клик по списку игроков в админке (только по строкам списка, не по нижней панели)
-            local row = y - 5
-            if y >= 6 and y <= H - 3 and row >= 1 and state.adminList[row] then -- ИСПРАВЛЕНИЕ 3: Используем отсортированный массив
-                local targetName = state.adminList[row].name
-                local targetData = state.adminList[row].data
-                
-                local newRole = "user"
-                if targetData.role == "user" then newRole = "admin"
-                elseif targetData.role == "admin" then newRole = "banned" end
-                
-                db.setRole(targetName, newRole)
-                setStatus("Роль " .. targetName .. " изменена на " .. newRole)
-                updateList(); drawScreen()
+            -- Окно управления игроком (бан / роль)
+            local mw, mh = 50, 12
+            local mx, my = math.floor((W - mw) / 2) + 1, math.floor((H - mh) / 2) + 1
+            if state.adminTarget then
+                if y == my + mh - 2 then
+                    if x >= mx + 2 and x < mx + 18 then
+                        -- ЗАБАНИТЬ на 1 час
+                        db.banPlayer(state.adminTarget, "Эмуляция бана", 60)
+                        setStatus("Игрок " .. state.adminTarget .. " забанен на 1 час")
+                        state.adminTarget = nil
+                        updateList(); drawScreen()
+                    elseif x >= mx + 20 and x < mx + 30 then
+                        -- Сменить роль (цикл)
+                        local pd = db.getPlayer(state.adminTarget)
+                        if pd then
+                            local newRole = "user"
+                            if pd.role == "user" then newRole = "admin"
+                            elseif pd.role == "admin" then newRole = "banned"
+                            elseif pd.role == "banned" then newRole = "user" end
+                            if newRole == "banned" then
+                                db.banPlayer(state.adminTarget, "Эмуляция бана", 0)
+                            else
+                                db.setRole(state.adminTarget, newRole)
+                            end
+                            setStatus("Роль " .. state.adminTarget .. " -> " .. newRole)
+                        end
+                        updateList(); drawScreen()
+                    elseif x >= mx + mw - 14 and x < mx + mw - 2 then
+                        state.adminTarget = nil
+                        drawScreen()
+                    end
+                end
+            else
+                -- Клик по строке игрока -> открыть окно бана
+                local row = y - 5
+                if y >= 6 and y <= H - 3 and row >= 1 and state.adminList[row] then
+                    state.adminTarget = state.adminList[row].name
+                    drawScreen()
+                end
             end
             
         elseif state.selectedItem then

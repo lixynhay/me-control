@@ -19,6 +19,10 @@ function db.load()
                 data.config = data.config or { allowUserWithdraw = true, allowUserDeposit = true }
                 data.thresholds = data.thresholds or {}
                 data.logs = data.logs or {}
+                for _, p in pairs(data.players) do
+                    if p.banReason == nil then p.banReason = "" end
+                    if p.banExpires == nil then p.banExpires = 0 end
+                end
             end
         end
     end
@@ -63,7 +67,7 @@ end
 -- Зарегистрировать нового игрока
 function db.registerPlayer(name)
     if data and not data.players[name] then
-        data.players[name] = { role = "user" }
+        data.players[name] = { role = "user", banReason = "", banExpires = 0 }
         db.save()
         return true
     end
@@ -155,6 +159,50 @@ function db.getLogs()
     if not data then return {} end
     if not data.logs then data.logs = {} end
     return data.logs
+end
+
+-- Забанить игрока. durationMinutes > 0 — временный бан, иначе навсегда
+function db.banPlayer(name, reason, durationMinutes)
+    if not data or not data.players[name] then return false end
+    local okT, t = pcall(os.time)
+    local now = (okT and tonumber(t)) or 0
+    local expires = 0
+    if durationMinutes and durationMinutes > 0 then
+        expires = now + durationMinutes * 60
+    end
+    data.players[name].role = "banned"
+    data.players[name].banReason = reason or ""
+    data.players[name].banExpires = expires
+    db.save()
+    return true
+end
+
+-- Разбанить игрока
+function db.unbanPlayer(name)
+    if not data or not data.players[name] then return false end
+    data.players[name].role = "user"
+    data.players[name].banReason = ""
+    data.players[name].banExpires = 0
+    db.save()
+    return true
+end
+
+-- Проверить бан: (true, {reason, expires}) если активен, иначе (false, nil).
+-- Истёкший бан автоматически снимается.
+function db.checkBan(name)
+    if not data or not data.players[name] then return false, nil end
+    local p = data.players[name]
+    if p.role ~= "banned" then return false, nil end
+    local okT, t = pcall(os.time)
+    local now = (okT and tonumber(t)) or 0
+    if p.banExpires and p.banExpires > 0 and now > 0 and now >= p.banExpires then
+        p.role = "user"
+        p.banReason = ""
+        p.banExpires = 0
+        db.save()
+        return false, nil
+    end
+    return true, { reason = p.banReason or "", expires = p.banExpires or 0 }
 end
 
 return db

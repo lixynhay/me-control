@@ -99,6 +99,10 @@ function ui.drawMain(W, H, state)
     gpu.fill(1, 1, W, H, " ")
     ui.drawFrame(1, 1, W, H, state.alertActive and C.danger or C.border)
     
+    -- Версия (слева на верхней рамке)
+    gpu.setForeground(C.muted)
+    gpu.set(3, 1, tostring(config.version or ""))
+    
     -- Индикатор текущего пользователя (кто стоит на PIM)
     local who
     if state.currentPlayer then
@@ -211,6 +215,34 @@ function ui.drawAdmin(W, H, adminList)
     gpu.set(3, H - 4, "Кликните на игрока для смены роли: user -> admin -> banned")
 end
 
+-- Окно управления игроком в админке (бан / роль)
+function ui.drawAdminBan(W, H, name, role, banReason)
+    local mw, mh = 50, 12
+    local mx, my = math.floor((W - mw) / 2) + 1, math.floor((H - mh) / 2) + 1
+    gpu.setBackground(C.overlay)
+    gpu.fill(1, 1, W, H, " ")
+    gpu.setBackground(C.modal)
+    gpu.fill(mx, my, mw, mh, " ")
+    ui.drawFrame(mx, my, mw, mh, C.title)
+    
+    gpu.setForeground(C.title)
+    local t = " Игрок: " .. tostring(name) .. " "
+    gpu.set(mx + math.floor((mw - unicode.len(t)) / 2) + 1, my, t)
+    
+    gpu.setForeground(C.white); gpu.set(mx + 2, my + 2, "Роль:")
+    gpu.setForeground(C.ok); gpu.set(mx + 11, my + 2, tostring(role or "?"))
+    
+    gpu.setForeground(C.white); gpu.set(mx + 2, my + 4, "Причина бана:")
+    gpu.setForeground(C.fg)
+    local br = tostring((banReason and banReason ~= "") and banReason or "—")
+    if unicode.len(br) > mw - 4 then br = unicode.sub(br, 1, mw - 7) .. "..." end
+    gpu.set(mx + 2, my + 5, br)
+    
+    ui.drawButton(mx + 2, my + mh - 2, 16, "ЗАБАНИТЬ 1ч", false, C.danger)
+    ui.drawButton(mx + 20, my + mh - 2, 10, "РОЛЬ", false, C.limit)
+    ui.drawButton(mx + mw - 14, my + mh - 2, 12, "ЗАКРЫТЬ", false, C.disabled)
+end
+
 function ui.drawMonitor(W, H, statusList)
     ui.drawFrame(2, 4, W - 3, H - 8, C.border)
     gpu.setForeground(C.title)
@@ -244,6 +276,41 @@ function ui.drawMonitor(W, H, statusList)
     
     gpu.setForeground(C.muted)
     gpu.set(3, H - 4, "Автообновление включено (каждые 2 сек)")
+end
+
+function ui.drawBannedScreen(W, H, banInfo)
+    banInfo = banInfo or {}
+    gpu.setBackground(C.danger)
+    gpu.setForeground(C.white)
+    gpu.fill(1, 1, W, H, " ")
+    
+    local title = "ДОСТУП ЗАПРЕЩЕН"
+    local y = math.floor(H / 2) - 3
+    gpu.setForeground(C.white)
+    gpu.set(math.floor((W - unicode.len(title)) / 2) + 1, y, title)
+    
+    local reason = "Причина: " .. tostring(banInfo.reason or "не указана")
+    if unicode.len(reason) > W - 4 then reason = unicode.sub(reason, 1, W - 7) .. "..." end
+    gpu.set(math.floor((W - unicode.len(reason)) / 2) + 1, y + 2, reason)
+    
+    local untilText
+    if banInfo.expires and banInfo.expires > 0 then
+        local d = tostring(banInfo.expires)
+        if os.date then
+            local ok, s = pcall(os.date, "%Y-%m-%d %H:%M", banInfo.expires)
+            if ok and s then d = s end
+        end
+        untilText = "До: " .. d
+    else
+        untilText = "До: Навсегда"
+    end
+    gpu.set(math.floor((W - unicode.len(untilText)) / 2) + 1, y + 3, untilText)
+    
+    local hint = "Обратитесь к администратору"
+    gpu.set(math.floor((W - unicode.len(hint)) / 2) + 1, y + 5, hint)
+    
+    gpu.setBackground(C.bg)
+    gpu.setForeground(C.fg)
 end
 
 function ui.drawLogs(W, H, logs, page, totalPages)
