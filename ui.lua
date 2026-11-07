@@ -139,7 +139,7 @@ function ui.drawMain(W, H, state)
     ui.drawButton(bottom.prev.x, H - 2, bottom.prev.w, "<<", false)
     ui.drawButton(bottom.refresh.x, H - 2, bottom.refresh.w, "ОБНОВИТЬ", false)
     ui.drawButton(bottom.next.x, H - 2, bottom.next.w, ">>", false)
-    if bottom.search and (state.currentTab == "ME" or state.currentTab == "INV") then
+    if bottom.search and (state.currentTab == "ME" or state.currentTab == "INV" or state.currentTab == "LOGS") then
         ui.drawButton(bottom.search.x, H - 2, bottom.search.w, "ПОИСК", false, C.ok)
     end
     if state.currentTab == "INV" and bottom.deposit then
@@ -150,6 +150,12 @@ function ui.drawMain(W, H, state)
     end
     
     if state.currentTab == "LOGS" then
+        if state.isLogSearching or (state.logSearchQuery and state.logSearchQuery ~= "") then
+            gpu.setForeground(C.title)
+            local s = "Поиск по логам: " .. tostring(state.logSearchQuery or "") .. "_"
+            if unicode.len(s) > W - 6 then s = unicode.sub(s, 1, W - 9) .. "..." end
+            gpu.set(3, 3, s)
+        end
         ui.drawLogs(W, H, state.logs or {}, state.logsPage or 1, state.logsTotalPages or 1)
         return
     elseif state.currentTab == "ADMIN" then

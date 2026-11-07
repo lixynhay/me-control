@@ -51,7 +51,10 @@ local state = {
     isTechAdmin = false,
     isBanReasonInput = false,
     banReasonText = "",
-    banTarget = nil
+    banTarget = nil,
+    logSearchQuery = "",
+    isLogSearching = false,
+    originalLogs = {}
 }
 
 local function setStatus(msg, isError)
@@ -82,6 +85,27 @@ local function applySearchFilter()
     if state.page > state.totalPages then state.page = state.totalPages end
 end
 
+-- Фильтр логов по player/item/action (без учёта регистра)
+local function applyLogSearchFilter()
+    if state.logSearchQuery == "" then
+        state.logs = state.originalLogs
+    else
+        local q = unicode.lower(state.logSearchQuery)
+        local filtered = {}
+        for _, e in ipairs(state.originalLogs) do
+            local p = unicode.lower(tostring(e.player or ""))
+            local it = unicode.lower(tostring(e.item or ""))
+            local a = unicode.lower(tostring(e.action or ""))
+            if p:find(q, 1, true) or it:find(q, 1, true) or a:find(q, 1, true) then
+                table.insert(filtered, e)
+            end
+        end
+        state.logs = filtered
+    end
+    state.logsTotalPages = math.max(1, math.ceil(#state.logs / (H - 10)))
+    if state.logsPage > state.logsTotalPages then state.logsPage = state.logsTotalPages end
+end
+
 local function updateList()
     if state.currentTab == "ME" then
         state.items = api.getNetworkItems()
@@ -107,9 +131,8 @@ local function updateList()
         state.monitorStatus = api.getThresholdStatus()
     elseif state.currentTab == "LOGS" then
         state.items = {}
-        state.logs = db.getLogs()
-        state.logsTotalPages = math.max(1, math.ceil(#state.logs / (H - 10)))
-        if state.logsPage > state.logsTotalPages then state.logsPage = state.logsTotalPages end
+        state.originalLogs = db.getLogs()
+        applyLogSearchFilter()
     end
     
     -- Поиск/фильтр по названию (только для ME/INV)
@@ -258,6 +281,7 @@ while true do
         state.isBanReasonInput = false
         state.banReasonText = ""
         state.banTarget = nil
+        state.isLogSearching = false
         state.currentTab = "ME"
         state.selectedItem = nil -- ИСПРАВЛЕНИЕ 4: Закрываем открытую карточку при уходе
         state.page = 1
@@ -301,6 +325,33 @@ while true do
                 if ch and ch ~= "" then
                     state.banReasonText = state.banReasonText .. ch
                     drawScreen()
+                end
+            end
+        elseif state.isLogSearching then
+            local code = tonumber(p3) or 0
+            if code == 28 then
+                -- Enter: сохранить фильтр и выйти
+                state.isLogSearching = false
+                applyLogSearchFilter(); drawScreen()
+            elseif code == 1 then
+                -- Esc: сбросить фильтр
+                state.isLogSearching = false
+                state.logSearchQuery = ""
+                applyLogSearchFilter(); drawScreen()
+            elseif code == 14 then
+                local n = unicode.len(state.logSearchQuery)
+                if n > 0 then state.logSearchQuery = unicode.sub(state.logSearchQuery, 1, n - 1) end
+                applyLogSearchFilter(); drawScreen()
+            else
+                local ch
+                if type(p2) == "number" and p2 > 0 then
+                    ch = unicode.char(p2)
+                elseif type(p2) == "string" and unicode.len(p2) == 1 then
+                    ch = p2
+                end
+                if ch and ch ~= "" then
+                    state.logSearchQuery = state.logSearchQuery .. ch
+                    applyLogSearchFilter(); drawScreen()
                 end
             end
         elseif state.isSearching then
@@ -354,8 +405,9 @@ while true do
         elseif clickPlayer ~= state.currentPlayer then
             setStatus("Панель занята игроком " .. tostring(state.currentPlayer), true)
         else
-            -- Любой клик выходит из режима поиска (кнопка ПОИСК ниже включит его снова)
+            -- Любой клик выходит из режима поиска (кнопки ПОИСК ниже включат его снова)
             state.isSearching = false
+            state.isLogSearching = false
         
         -- Переключение вкладок
         if y == 2 then
@@ -390,10 +442,16 @@ while true do
                     if state.logsPage < state.logsTotalPages then state.logsPage = state.logsPage + 1; drawScreen() end
                 elseif state.page < state.totalPages then state.page = state.page + 1; drawScreen() end
             end
-            if bottom.search and (state.currentTab == "ME" or state.currentTab == "INV") and x >= bottom.search.x and x < bottom.search.x + bottom.search.w then
-                state.isSearching = true
-                state.searchQuery = ""
-                applySearchFilter(); drawScreen()
+            if bottom.search and x >= bottom.search.x and x < bottom.search.x + bottom.search.w then
+                if state.currentTab == "LOGS" then
+                    state.isLogSearching = true
+                    state.logSearchQuery = ""
+                    applyLogSearchFilter(); drawScreen()
+                elseif state.currentTab == "ME" or state.currentTab == "INV" then
+                    state.isSearching = true
+                    state.searchQuery = ""
+                    applySearchFilter(); drawScreen()
+                end
             end
             if state.currentTab == "INV" and bottom.deposit and x >= bottom.deposit.x and x < bottom.deposit.x + bottom.deposit.w then
                 if not api.isPlayerPresent() then

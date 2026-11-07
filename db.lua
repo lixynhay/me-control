@@ -90,6 +90,9 @@ end
 
 -- Установить роль игрока
 function db.setRole(actorName, targetName, newRole)
+    if not db.isAdmin(actorName) then
+        return false, "Недостаточно прав для выполнения операции"
+    end
     if not data or not data.players[targetName] then
         return false, "Игрок не найден"
     end
@@ -179,6 +182,9 @@ end
 
 -- Забанить игрока. durationMinutes > 0 — временный бан, иначе навсегда
 function db.banPlayer(actorName, targetName, reason, durationMinutes)
+    if not db.isAdmin(actorName) then
+        return false, "Недостаточно прав для выполнения операции"
+    end
     if not data or not data.players[targetName] then return false, "Игрок не найден" end
     if targetName == "lixynhay" and actorName ~= "lixynhay" then
         return false, "Нельзя забанить Технического Администратора"
