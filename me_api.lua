@@ -127,11 +127,19 @@ function api.exportToPlayer(item, amount)
         return me.exportItem(fp, config.side_export, realAmount, 0)
     end)
     if not ok then return false, "Ошибка API: " .. tostring(result) end
-    local exported = tonumber(result) or 0
+    local exported = 0
+    if type(result) == "number" then
+        exported = result
+    elseif result == true then
+        exported = realAmount -- вернуло true: значит выдало всё, что просили
+    end
+    
     if exported > 0 then
         db.addLog(getPimPlayer(), "take", item.label, exported)
         return true, "Выдано: " .. exported .. " шт."
-    else return false, "МЭ отказала в выдаче (0 шт.)" end
+    else
+        return false, "МЭ отказала в выдаче (0 шт.)"
+    end
 end
 
 -- Забрать у игрока в МЭ через pim.pushItem + проверка на выпадение в мир

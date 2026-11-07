@@ -257,8 +257,10 @@ function ui.drawAdminBan(W, H, name, role, banReason)
     gpu.fill(mx, my, mw, mh, " ")
     ui.drawFrame(mx, my, mw, mh, C.title)
     
+    -- Заголовок по центру верхней рамки (с пробелами по краям, как в drawModal)
     gpu.setForeground(C.title)
     local t = " Игрок: " .. tostring(name) .. " "
+    if unicode.len(t) > mw - 2 then t = unicode.sub(t, 1, mw - 5) .. "..." end
     gpu.set(mx + math.floor((mw - unicode.len(t)) / 2) + 1, my, t)
     
     gpu.setForeground(C.white); gpu.set(mx + 2, my + 2, "Роль:")
@@ -270,9 +272,13 @@ function ui.drawAdminBan(W, H, name, role, banReason)
     if unicode.len(br) > mw - 4 then br = unicode.sub(br, 1, mw - 7) .. "..." end
     gpu.set(mx + 2, my + 5, br)
     
-    ui.drawButton(mx + 2, my + mh - 2, 16, "ЗАБАНИТЬ", false, C.danger)
-    ui.drawButton(mx + 20, my + mh - 2, 10, "РОЛЬ", false, C.limit)
-    ui.drawButton(mx + mw - 14, my + mh - 2, 12, "ЗАКРЫТЬ", false, C.disabled)
+    -- Кнопки равномерно по ширине окна: 2 | 16 | 4 | 10 | 4 | 12 | = 48 из 50
+    local bw1, bw2, bw3, gap = 16, 10, 12, 4
+    local bx = mx + 2
+    local by = my + mh - 2
+    ui.drawButton(bx, by, bw1, "ЗАБАНИТЬ", false, C.danger)
+    ui.drawButton(bx + bw1 + gap, by, bw2, "РОЛЬ", false, C.limit)
+    ui.drawButton(bx + bw1 + gap + bw2 + gap, by, bw3, "ЗАКРЫТЬ", false, C.disabled)
 end
 
 -- Ввод причины бана с клавиатуры

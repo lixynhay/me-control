@@ -479,7 +479,7 @@ while true do
                         state.banReasonText = ""
                         state.adminTarget = nil
                         drawScreen()
-                    elseif x >= mx + 20 and x < mx + 30 then
+                    elseif x >= mx + 22 and x < mx + 32 then
                         -- Сменить роль (цикл)
                         local pd = db.getPlayer(state.adminTarget)
                         if pd then
@@ -500,7 +500,7 @@ while true do
                             end
                         end
                         updateList(); drawScreen()
-                    elseif x >= mx + mw - 14 and x < mx + mw - 2 then
+                    elseif x >= mx + 36 and x < mx + 48 then
                         state.adminTarget = nil
                         drawScreen()
                     end
