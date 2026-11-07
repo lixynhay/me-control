@@ -14,6 +14,11 @@ end
 
 db.load()
 gpu.setResolution(gpu.maxResolution())
+
+-- Принудительный инвертированный режим касания: прямой клик ПКМ = событие touch
+local screen = component.screen
+screen.setTouchModeInverted(true)
+
 local W, H = gpu.getResolution()
 
 local state = {
@@ -65,8 +70,9 @@ end
 updateList(); drawScreen()
 
 while true do
-    -- ИСПРАВЛЕНИЕ 1: Добавлена 4-я переменная p3 для правильного захвата координат клика
-    local eventName, p1, p2, p3 = event.pull("touch", "player_on", "player_off")
+    -- Ловим прерывание (Ctrl+C), чтобы скрипт можно было остановить
+    local eventName, p1, p2, p3 = event.pull(0.05, "touch", "player_on", "player_off", "interrupted")
+    if eventName == "interrupted" then os.exit() end
     
     if eventName == "player_on" then
         state.player = tostring(p1)
@@ -98,6 +104,7 @@ while true do
     elseif eventName == "touch" then
         -- ИСПРАВЛЕНИЕ 1: Для touch p2 - это X, p3 - это Y
         local x, y = p2, p3
+        setStatus("DEBUG: Тач X=" .. tostring(x) .. " Y=" .. tostring(y))
         
         -- Переключение вкладок
         if y == 2 then
