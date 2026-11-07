@@ -29,6 +29,7 @@
    wget https://raw.githubusercontent.com/lixynhay/me-control/main/db.lua
    wget https://raw.githubusercontent.com/lixynhay/me-control/main/config.lua
    wget https://raw.githubusercontent.com/lixynhay/me-control/main/test_craft.lua
+   wget https://raw.githubusercontent.com/lixynhay/me-control/main/test_energy.lua
    wget https://raw.githubusercontent.com/lixynhay/me-control/main/version.txt
    ```
 3. Запустите:
@@ -109,6 +110,27 @@ test_craft.lua
 
 Причина последней неудачи также сохраняется в `_G.last_craft_error`
 и выводится в статус-бар панели: `Крафты не найдены. Ошибка: …`.
+
+### Диагностика энергии
+
+Если в статистике нет данных об энергии, запустите:
+
+```bash
+test_energy.lua
+```
+
+Скрипт перебирает энергетические компоненты (`me_controller`, `energy_acceptor`
+и др.), печатает их методы, вызывает типовые (`getEnergyStored`, `getStoredPower`,
+`getAverageInsertion`, …) через `pcall` и в конце выдаёт:
+
+```
+ИТОГ: Энергия = 12500 / 20000 (63%)
+Источник: me_controller (ctrl-0001)
+Методы:   getStoredPower() / getMaxStoredPower()
+```
+
+Если ни одна пара «занято / всего» не сработала, скрипт подскажет, что нужен
+адаптер вплотную к ME Controller.
 
 ## 🔄 Обновление
 
