@@ -520,35 +520,39 @@ function ui.getItemIcon(name)
 end
 
 -- ===== График энергии («кардиограмма») =====
-local GRAPH_BLOCKS = { "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" }
+-- Символы графика по уровню заряда (одна строка, 5 дискретных уровней)
+local GRAPH_LEVELS = {
+    { min = 80, symbol = "█" },
+    { min = 60, symbol = "▇" },
+    { min = 40, symbol = "▆" },
+    { min = 20, symbol = "▅" },
+    { min = 0,  symbol = "▁" },
+}
 
--- Рисует столбчатую диаграмму: один столбец на точку истории.
--- x — левая колонка, yBottom — нижняя строка графика, rows — высота в строках.
-local function drawEnergyGraph(x, yBottom, width, rows, history)
-    for r = 0, rows - 1 do
-        gpu.set(x, yBottom - r, string.rep(" ", width))
+local function graphSymbol(pct)
+    pct = tonumber(pct) or 0
+    if pct <= 0 then return " " end
+    if pct > 100 then pct = 100 end
+    for _, lvl in ipairs(GRAPH_LEVELS) do
+        if pct > lvl.min or (lvl.min == 0 and pct > 0) then
+            return lvl.symbol
+        end
     end
+    return " "
+end
+
+-- Рисует однострочный график энергии: один символ на замер истории.
+local function drawEnergyGraph(x, y, width, history)
+    gpu.set(x, y, string.rep(" ", width))
     if not history or #history == 0 then return end
 
     local n = math.min(#history, width)
     local startIdx = #history - n + 1
-    local totalLevels = rows * #GRAPH_BLOCKS
-
+    local chars = {}
     for col = 1, n do
-        local pct = tonumber(history[startIdx + col - 1]) or 0
-        if pct < 0 then pct = 0 end
-        if pct > 100 then pct = 100 end
-        local lvl = math.floor(pct / 100 * totalLevels + 0.5)
-        if lvl < 1 then lvl = 1 end
-        if lvl > totalLevels then lvl = totalLevels end
-        local remaining = lvl
-        for r = 0, rows - 1 do
-            local cell = math.min(#GRAPH_BLOCKS, remaining)
-            remaining = remaining - cell
-            if cell <= 0 then break end
-            gpu.set(x + col - 1, yBottom - r, GRAPH_BLOCKS[cell])
-        end
+        chars[col] = graphSymbol(history[startIdx + col - 1])
     end
+    gpu.set(x, y, table.concat(chars))
 end
 
 -- Секунды -> ЧЧ:ММ:СС
@@ -596,18 +600,19 @@ function ui.drawStats(W, H, info, storage, history)
         gpu.setForeground(C.white)
         gpu.set(5, y, "Энергия:")
         gpu.setForeground(C.ok)
-        gpu.set(25, y, string.format("%d / %d AE (%d%%)", info.energyStored, info.energyMax, pct))
+        gpu.set(25, y, string.format("%d / %d AE (%d%%)",
+            math.floor(info.energyStored), math.floor(info.energyMax), pct))
         y = y + 1
 
         gpu.setForeground(pct >= 20 and C.ok or C.danger)
         gpu.set(5, y, progressBar(pct, 20))
         y = y + 1
 
-        -- «Кардиограмма» энергии: 3 строки высотой, зелёная
-        if y + 2 <= lastRow then
+        -- График энергии: одна строка, цвет C.ok
+        if y <= lastRow then
             gpu.setForeground(C.ok)
-            drawEnergyGraph(5, y + 2, 20, 3, history)
-            y = y + 3
+            drawEnergyGraph(5, y, 20, history)
+            y = y + 1
         end
     end
 

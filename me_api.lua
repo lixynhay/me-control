@@ -546,13 +546,42 @@ function api.getNetworkInfo()
         end
     end
     
-    -- Пробуем получить энергию через me_controller
+    -- Энергия сети.
+    -- В AE2-интеграции OpenComputers методы называются getStoredPower/getMaxStoredPower
+    -- (getEnergyStored/getMaxEnergyStored там отсутствуют). Сначала пробуем их у
+    -- me_interface, затем у me_controller, а классические имена — как резерв.
+    local function readEnergy(source, storedMethod, maxMethod)
+        if not source then return nil, nil end
+        local okS, stored = pcall(function() return source[storedMethod]() end)
+        local okM, maxv = pcall(function() return source[maxMethod]() end)
+        if okS and okM and type(stored) == "number" and type(maxv) == "number" and maxv > 0 then
+            return stored, maxv
+        end
+        return nil, nil
+    end
+
+    local sources = { me }
     if component.isAvailable("me_controller") then
-        local ctrl = component.me_controller
-        local okE, eStored = pcall(function() return ctrl.getEnergyStored() end)
-        if okE then info.energyStored = eStored end
-        local okM, eMax = pcall(function() return ctrl.getMaxEnergyStored() end)
-        if okM then info.energyMax = eMax end
+        sources[#sources + 1] = component.me_controller
+    end
+
+    local pairsToTry = {
+        { "getStoredPower", "getMaxStoredPower" },
+        { "getEnergyStored", "getMaxEnergyStored" },
+        { "getEnergy", "getMaxEnergy" },
+    }
+
+    for _, source in ipairs(sources) do
+        for _, pair in ipairs(pairsToTry) do
+            local stored, maxv = readEnergy(source, pair[1], pair[2])
+            if stored and maxv then
+                info.energyStored = math.floor(stored)
+                info.energyMax = math.floor(maxv)
+                info.energySource = pair[1] .. "()"
+                break
+            end
+        end
+        if info.energyStored then break end
     end
     
     -- Пробуем получить список сопроцессоров (если метод есть)

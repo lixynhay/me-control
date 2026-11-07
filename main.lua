@@ -40,7 +40,6 @@ local state = {
     networkInfo = {},
     storageInfo = nil,
     energyHistory = {},
-    collectEnergy = false,
     craftables = {},
     craftPage = 1,
     lastCraftStatus = nil,
@@ -155,20 +154,6 @@ local function updateList()
         state.storageInfo = api.getStorageInfo()
         state.networkInfo.storage = state.storageInfo
         state.networkInfo.crafting = api.getCraftingInfo()
-        -- Точка для графика энергии (не чаще раза в 2 сек — см. цикл ниже)
-        if state.collectEnergy then
-            state.collectEnergy = false
-            local eStored = tonumber(state.networkInfo.energyStored)
-            local eMax = tonumber(state.networkInfo.energyMax)
-            if eStored and eMax and eMax > 0 then
-                local pct = eStored / eMax * 100
-                if pct < 0 then pct = 0 end
-                if pct > 100 then pct = 100 end
-                local hist = state.energyHistory
-                hist[#hist + 1] = pct
-                while #hist > 20 do table.remove(hist, 1) end
-            end
-        end
     elseif state.currentTab == "CRAFT" then
         state.items = {}
         state.craftables = api.getCraftables()
@@ -337,9 +322,23 @@ while true do
     
     -- Автообновление статистики и монитора раз в 2 секунды (не трогаем открытую карточку)
     if state.selectedItem == nil and (state.currentTab == "STATS" or state.currentTab == "MON") and computer.uptime() - state.lastUpdate > 2 then
-        state.collectEnergy = (state.currentTab == "STATS")
         updateList()
-        state.collectEnergy = false
+
+        -- Точка для графика энергии (только на вкладке «Статистика»)
+        if state.currentTab == "STATS" and state.networkInfo then
+            local eStored = tonumber(state.networkInfo.energyStored)
+            local eMax = tonumber(state.networkInfo.energyMax)
+            if eStored and eMax and eMax > 0 then
+                local pct = eStored / eMax * 100
+                if pct < 0 then pct = 0 end
+                if pct > 100 then pct = 100 end
+                table.insert(state.energyHistory, pct)
+                while #state.energyHistory > 20 do
+                    table.remove(state.energyHistory, 1)
+                end
+            end
+        end
+
         drawScreen()
         state.lastUpdate = computer.uptime()
     end

@@ -348,11 +348,13 @@ line("")
 
 rule("=")
 if best then
+    local stored = math.floor(tonumber(best.stored) or 0)
+    local maxv = math.floor(tonumber(best.max) or 0)
     local pct = 0
-    if best.max > 0 then
-        pct = math.floor(best.stored / best.max * 100 + 0.5)
+    if maxv > 0 then
+        pct = math.floor(stored / maxv * 100 + 0.5)
     end
-    line(string.format("ИТОГ: Энергия = %d / %d (%d%%)", best.stored, best.max, pct))
+    line(string.format("ИТОГ: Энергия = %.0f / %.0f (%.0f%%)", stored, maxv, pct))
     line("Источник: " .. best.source)
     line("Методы:   " .. best.storedMethod .. "() / " .. best.maxMethod .. "()")
 else
