@@ -308,7 +308,7 @@ while true do
                     if state.currentTab == "ME" then
                         ok, msg = api.exportToPlayer(state.selectedItem, state.quantity)
                     else
-                        ok, msg = api.pushFromPlayer(state.selectedItem.label, state.quantity)
+                        ok, msg = api.pushFromPlayer(state.selectedItem, state.quantity)
                     end
                     setStatus(msg, not ok)
                 end

@@ -11,6 +11,26 @@ local function stripColor(text)
     return text:gsub("§.", "")
 end
 
+-- Сколько предметов данного типа сейчас в МЭ (сначала по name, иначе по label)
+local function getNetworkCount(itemName, itemLabel)
+    local me = component.me_interface
+    local ok, items = pcall(function() return me.getItemsInNetwork() end)
+    if not ok or type(items) ~= "table" then return nil end
+    local byName, anyName = 0, false
+    local byLabel, anyLabel = 0, false
+    for _, i in ipairs(items) do
+        if itemName and i.name == itemName then
+            byName = byName + (i.size or 0); anyName = true
+        end
+        if itemLabel and stripColor(i.label or "") == itemLabel then
+            byLabel = byLabel + (i.size or 0); anyLabel = true
+        end
+    end
+    if anyName then return byName end
+    if anyLabel then return byLabel end
+    return 0
+end
+
 -- Получить предметы из МЭ
 function api.getNetworkItems()
     local me = component.me_interface
@@ -93,16 +113,27 @@ function api.exportToPlayer(item, amount)
     else return false, "МЭ отказала в выдаче (0 шт.)" end
 end
 
--- Забрать у игрока в МЭ (через me.importItem, чтобы предметы не выбрасывались в мир)
-function api.pushFromPlayer(itemLabel, amount)
+-- Забрать у игрока в МЭ через pim.pushItem + проверка на выпадение в мир
+function api.pushFromPlayer(item, amount)
     local pim = component.pim
-    local me = component.me_interface
+    local itemLabel, itemName
+    if type(item) == "table" then
+        itemLabel = item.label or item.name
+        itemName = item.name or item.label
+    else
+        itemLabel = item
+        itemName = item
+    end
+
     local moved = 0
     local okSize, size = pcall(function() return pim.getInventorySize() end)
     if not okSize or not size then return false, "PIM недоступен" end
     size = math.floor(tonumber(size) or 0)
     if size == 0 then return false, "Инвентарь пуст" end
-    
+
+    -- Запоминаем количество в МЭ до выталкивания
+    local countBefore = getNetworkCount(itemName, itemLabel)
+
     for slot = 1, size do
         local sOk, stack = pcall(function() return pim.getStackInSlot(slot) end)
         if sOk and stack then
@@ -112,23 +143,29 @@ function api.pushFromPlayer(itemLabel, amount)
             if stackLabel == itemLabel and stackCount > 0 then
                 local want = math.min(amount - moved, stackCount)
                 if want > 0 then
-                    local iOk, imported = pcall(function() return me.importItem(config.side_import, slot, want) end)
-                    if iOk and tonumber(imported) then
-                        moved = moved + tonumber(imported)
-                    end
+                    local pOk, pushed = pcall(function() return pim.pushItem(config.side_push, slot, want) end)
+                    if pOk and tonumber(pushed) then moved = moved + tonumber(pushed) end
                     if moved >= amount then break end
                 end
             end
         end
     end
-    
+
+    if moved == 0 then
+        return false, "Предмет не найден или МЭ не приняла его"
+    end
+
+    -- Даём МЭ время обработать и сверяем количество
+    os.sleep(0.5)
+    local countAfter = getNetworkCount(itemName, itemLabel)
+    if countBefore ~= nil and countAfter ~= nil and (countAfter - countBefore) < moved then
+        return false, "ВНИМАНИЕ: Предмет выпал в мир! Подберите его!"
+    end
+
     if moved >= amount then
         return true, "Сдано: " .. moved .. " шт."
-    elseif moved > 0 then
-        return false, "МЭ приняла только " .. moved .. " из " .. amount .. " шт. Остальное осталось в инвентаре"
-    else
-        return false, "МЭ отказалась принимать " .. itemLabel .. ". Предмет остался в инвентаре"
     end
+    return false, "МЭ приняла только " .. moved .. " из " .. amount .. " шт. Остальное осталось в инвентаре"
 end
 
 -- Проверка наличия игрока
@@ -219,10 +256,9 @@ function api.getThresholdStatus()
     return list
 end
 
--- Сдать весь инвентарь игрока в МЭ (через me.importItem)
+-- Сдать весь инвентарь игрока в МЭ через pim.pushItem
 function api.depositAll()
     local pim = component.pim
-    local me = component.me_interface
     local moved = 0
     local okSize, size = pcall(function() return pim.getInventorySize() end)
     if not okSize or not size then return 0, "PIM недоступен" end
@@ -235,17 +271,15 @@ function api.depositAll()
             -- Поддержка форматов OpenPeripheral (qty) и OC (size)
             local stackCount = stack.qty or stack.size or 0
             if stackCount > 0 then
-                local iOk, imported = pcall(function() return me.importItem(config.side_import, slot, stackCount) end)
-                if iOk and tonumber(imported) then
-                    moved = moved + tonumber(imported)
-                end
+                local pOk, pushed = pcall(function() return pim.pushItem(config.side_push, slot, stackCount) end)
+                if pOk and tonumber(pushed) then moved = moved + tonumber(pushed) end
             end
         end
     end
     if moved > 0 then
         return moved, "Сдано всё: " .. moved .. " шт."
     end
-    return 0, "МЭ отказалась принимать предметы. Инвентарь не изменён"
+    return 0, "Нечего сдавать"
 end
 
 -- Проверка: есть ли хотя бы один предмет со статусом «МАЛО»
