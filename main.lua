@@ -1,3 +1,9 @@
+-- Сброс кэша модулей проекта: обновления через getcode подхватываются без перезагрузки
+package.loaded["ui"] = nil
+package.loaded["me_api"] = nil
+package.loaded["db"] = nil
+package.loaded["config"] = nil
+
 local component = require("component")
 local event = require("event")
 local unicode = require("unicode")
