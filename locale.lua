@@ -9,8 +9,23 @@ local locale = {}
 locale.names = {}
 locale.byLabel = {}
 
-local okGen, gen = pcall(require, "locale_generated")
-if okGen and type(gen) == "table" then
+-- Надёжная загрузка сгенерированного словаря:
+-- сначала require, затем прямой loadfile (на случай, если package.path не видит /home)
+local function loadGenerated()
+    local ok, gen = pcall(require, "locale_generated")
+    if ok and type(gen) == "table" then return gen end
+    for _, path in ipairs({ "/home/locale_generated.lua", "locale_generated.lua" }) do
+        local chunk = loadfile(path)
+        if chunk then
+            local ok2, res = pcall(chunk)
+            if ok2 and type(res) == "table" then return res end
+        end
+    end
+    return nil
+end
+
+local gen = loadGenerated()
+if type(gen) == "table" then
     if type(gen.names) == "table" then
         for k, v in pairs(gen.names) do locale.names[k] = v end
     end
