@@ -59,8 +59,10 @@ local function updateList()
         end
         table.sort(state.adminList, function(a, b) return a.name < b.name end)
     elseif state.currentTab == "STATS" then
+        state.items = {}
         state.networkInfo = api.getNetworkInfo()
     elseif state.currentTab == "MON" then
+        state.items = {}
         state.monitorStatus = api.getThresholdStatus()
     end
     
@@ -79,6 +81,15 @@ local function drawScreen()
     gpu.set(3, H - 1, state.statusMsg)
 end
 
+local initialPlayer = component.pim.getInventoryName()
+if initialPlayer and initialPlayer ~= "" then
+    state.player = initialPlayer
+    local pData = db.getPlayer(state.player)
+    if pData then
+        state.isAdmin = (pData.role == "admin")
+    end
+end
+
 updateList(); drawScreen()
 
 while true do
@@ -86,8 +97,8 @@ while true do
     local eventName, p1, p2, p3 = event.pull(0.1)
     if eventName == "interrupted" then os.exit() end
     
-    -- Автообновление статистики и монитора раз в 2 секунды
-    if (state.currentTab == "STATS" or state.currentTab == "MON") and computer.uptime() - state.lastUpdate > 2 then
+    -- Автообновление статистики и монитора раз в 2 секунды (не трогаем открытую карточку)
+    if state.selectedItem == nil and (state.currentTab == "STATS" or state.currentTab == "MON") and computer.uptime() - state.lastUpdate > 2 then
         updateList()
         drawScreen()
         state.lastUpdate = computer.uptime()
@@ -154,6 +165,8 @@ while true do
             if x >= 52 and x < 67 and state.currentTab == "INV" then
                 if not api.isPlayerPresent() then
                     setStatus("Встаньте на PIM для сдачи!", true)
+                elseif not api.canDeposit(state.player) then
+                    setStatus("Вам запрещено сдавать предметы!", true)
                 else
                     local moved, msg = api.depositAll()
                     updateList(); drawScreen()
@@ -241,7 +254,7 @@ while true do
             -- Клик по списку (навигация уже обработана выше)
             if y >= 5 and y <= H - 5 and x >= 3 and x <= W - 3 then
                 local idx = (state.page - 1) * (H - 10) + (y - 4)
-                if state.items[idx] then 
+                if (state.currentTab == "ME" or state.currentTab == "INV") and state.items[idx] then 
                     state.selectedItem = state.items[idx]
                     state.quantity = 1
                     local canAct = (state.currentTab == "ME" and api.canWithdraw(state.player)) or (state.currentTab == "INV" and api.canDeposit(state.player))

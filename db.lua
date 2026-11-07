@@ -15,6 +15,9 @@ function db.load()
             local ok, loaded = pcall(serialization.unserialize, content)
             if ok and type(loaded) == "table" then
                 data = loaded
+                data.players = data.players or {}
+                data.config = data.config or { allowUserWithdraw = true, allowUserDeposit = true }
+                data.thresholds = data.thresholds or {}
             end
         end
     end

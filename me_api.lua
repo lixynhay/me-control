@@ -1,14 +1,14 @@
 local component = require("component")
 local config = require("config")
 local db = require("db")
-local me = component.me_interface
-local pim = component.pim
 
 local api = {}
 
 -- Получить предметы из МЭ
 function api.getNetworkItems()
-    local raw = me.getItemsInNetwork()
+    local me = component.me_interface
+    local ok, raw = pcall(function() return me.getItemsInNetwork() end)
+    if not ok or type(raw) ~= "table" then return {} end
     local list = {}
     for _, i in pairs(raw) do 
         if i and i.label then 
@@ -24,12 +24,13 @@ function api.getPlayerInventory()
     local inv = {}
     if not api.isPlayerPresent() then return inv end
     
-    local size = pim.getInventorySize()
-    if not size or size == 0 then return inv end
+    local pim = component.pim
+    local okSize, size = pcall(function() return pim.getInventorySize() end)
+    if not okSize or not size or size == 0 then return inv end
 
     for slot = 1, size do
-        local stack = pim.getStackInSlot(slot)
-        if stack then
+        local sOk, stack = pcall(function() return pim.getStackInSlot(slot) end)
+        if sOk and stack then
             -- Поддержка форматов OpenPeripheral (display_name / qty) и OC (label / size)
             local itemLabel = stack.display_name or stack.label or stack.name or "Неизвестный предмет"
             local itemCount = stack.qty or stack.size or 0
@@ -63,27 +64,37 @@ end
 
 -- Выдать игроку из МЭ
 function api.exportToPlayer(item, amount)
+    local me = component.me_interface
     local realAmount = math.min(amount, item.size)
     if realAmount <= 0 then return false, "В МЭ нет предметов" end
     
-    local ok, err = me.exportItem({id = item.name, dmg = item.damage}, config.side_export, realAmount, 0)
-    if ok then return true, "Выдано: " .. realAmount .. " шт." 
-    else return false, "Ошибка: " .. tostring(err) end
+    local ok, result = pcall(function()
+        return me.exportItem({id = item.name, dmg = item.damage}, config.side_export, realAmount, 0)
+    end)
+    if not ok then return false, "Ошибка API: " .. tostring(result) end
+    local exported = tonumber(result) or 0
+    if exported > 0 then return true, "Выдано: " .. exported .. " шт."
+    else return false, "МЭ отказала в выдаче (0 шт.)" end
 end
 
 -- Забрать у игрока в МЭ
 function api.pushFromPlayer(itemLabel, amount)
+    local pim = component.pim
     local moved = 0
-    for slot = 1, pim.getInventorySize() do
-        local stack = pim.getStackInSlot(slot)
-        if stack then
+    local okSize, size = pcall(function() return pim.getInventorySize() end)
+    if not okSize or not size then return false, "PIM недоступен" end
+    
+    for slot = 1, size do
+        local sOk, stack = pcall(function() return pim.getStackInSlot(slot) end)
+        if sOk and stack then
             -- Поддержка форматов OpenPeripheral (display_name / qty) и OC (label / size)
             local stackLabel = stack.display_name or stack.label or stack.name
             local stackCount = stack.qty or stack.size or 0
             if stackLabel == itemLabel then
                 local canMove = math.min(amount - moved, stackCount)
                 if canMove > 0 then
-                    moved = moved + pim.pushItem(config.side_push, slot, canMove)
+                    local pOk, pushed = pcall(function() return pim.pushItem(config.side_push, slot, canMove) end)
+                    if pOk and pushed then moved = moved + pushed end
                     if moved >= amount then break end
                 end
             end
@@ -96,7 +107,9 @@ end
 
 -- Проверка наличия игрока
 function api.isPlayerPresent()
-    local name = pim.getInventoryName()
+    local pim = component.pim
+    local ok, name = pcall(function() return pim.getInventoryName() end)
+    if not ok then return false end
     return name ~= nil and name ~= ""
 end
 
@@ -117,25 +130,30 @@ end
 
 -- Получить информацию о МЭ-сети (для вкладки «Статистика»)
 function api.getNetworkInfo()
+    local me = component.me_interface
     local info = { totalItems = 0, totalTypes = 0, energyStored = nil, energyMax = nil, cpus = nil }
     
     -- Считаем предметы
-    local items = me.getItemsInNetwork()
-    info.totalTypes = #items
-    for _, item in ipairs(items) do
-        info.totalItems = info.totalItems + item.size
+    local okItems, items = pcall(function() return me.getItemsInNetwork() end)
+    if okItems and type(items) == "table" then
+        info.totalTypes = #items
+        for _, item in ipairs(items) do
+            info.totalItems = info.totalItems + (item.size or 0)
+        end
     end
     
     -- Пробуем получить энергию через me_controller
     if component.isAvailable("me_controller") then
         local ctrl = component.me_controller
-        info.energyStored = ctrl.getEnergyStored()
-        info.energyMax = ctrl.getMaxEnergyStored()
+        local okE, eStored = pcall(function() return ctrl.getEnergyStored() end)
+        if okE then info.energyStored = eStored end
+        local okM, eMax = pcall(function() return ctrl.getMaxEnergyStored() end)
+        if okM then info.energyMax = eMax end
     end
     
     -- Пробуем получить список сопроцессоров (если метод есть)
-    if me.getCpus then
-        local ok, cpus = pcall(me.getCpus)
+    if me and me.getCpus then
+        local ok, cpus = pcall(function() return me.getCpus() end)
         if ok and cpus then
             info.cpus = #cpus
         end
@@ -148,13 +166,16 @@ end
 function api.getThresholdStatus()
     local list = {}
     local thresholds = db.getThresholds()
+    local me = component.me_interface
     
     -- Карта текущих количеств по имени предмета
     local currentMap = {}
-    local items = me.getItemsInNetwork()
-    for _, item in ipairs(items) do
-        if item and item.name then
-            currentMap[item.name] = (currentMap[item.name] or 0) + item.size
+    local okItems, items = pcall(function() return me.getItemsInNetwork() end)
+    if okItems and type(items) == "table" then
+        for _, item in ipairs(items) do
+            if item and item.name then
+                currentMap[item.name] = (currentMap[item.name] or 0) + (item.size or 0)
+            end
         end
     end
     
@@ -174,14 +195,19 @@ end
 
 -- Сдать весь инвентарь игрока в МЭ
 function api.depositAll()
+    local pim = component.pim
     local moved = 0
-    for slot = 1, pim.getInventorySize() do
-        local stack = pim.getStackInSlot(slot)
-        if stack then
+    local okSize, size = pcall(function() return pim.getInventorySize() end)
+    if not okSize or not size then return 0, "PIM недоступен" end
+    
+    for slot = 1, size do
+        local sOk, stack = pcall(function() return pim.getStackInSlot(slot) end)
+        if sOk and stack then
             -- Поддержка форматов OpenPeripheral (qty) и OC (size)
             local stackCount = stack.qty or stack.size or 0
             if stackCount > 0 then
-                moved = moved + pim.pushItem(config.side_push, slot, stackCount)
+                local pOk, pushed = pcall(function() return pim.pushItem(config.side_push, slot, stackCount) end)
+                if pOk and pushed then moved = moved + pushed end
             end
         end
     end
