@@ -498,6 +498,40 @@ function api.canDeposit(playerName)
     return db.getConfig().allowUserDeposit ~= false
 end
 
+-- Информация о крафт-процессорах: всего и занятых.
+-- me.getCpus() возвращает список таблиц вида { name, storage, coprocessors, busy }.
+-- Если метод недоступен или упал — вернёт нули (без исключений).
+function api.getCraftingInfo()
+    local result = { totalCpus = 0, busyCpus = 0 }
+
+    local okMe, me = pcall(function() return component.me_interface end)
+    if not okMe or not me then return result end
+
+    local okFn, fn = pcall(function() return me.getCpus end)
+    if not okFn or fn == nil then return result end
+
+    local ok, cpus = pcall(function() return me.getCpus() end)
+    if not ok or type(cpus) ~= "table" then return result end
+
+    for _, cpu in pairs(cpus) do
+        result.totalCpus = result.totalCpus + 1
+        local busy = nil
+        if type(cpu) == "table" then
+            busy = cpu.busy
+            if busy == nil then busy = cpu.isBusy end
+            if type(busy) == "function" then
+                local okB, b = pcall(function() return cpu.busy() end)
+                if okB then busy = b else busy = nil end
+            end
+        end
+        if busy == true then
+            result.busyCpus = result.busyCpus + 1
+        end
+    end
+
+    return result
+end
+
 -- Получить информацию о МЭ-сети (для вкладки «Статистика»)
 function api.getNetworkInfo()
     local me = component.me_interface

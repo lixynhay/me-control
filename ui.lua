@@ -1,5 +1,6 @@
 local component = require("component")
 local unicode = require("unicode")
+local computer = require("computer")
 local config = require("config")
 local api = require("me_api")
 local db = require("db")
@@ -9,17 +10,16 @@ local ui = {}
 local formatSize = config.formatSize
 
 function ui.drawFrame(x, y, w, h, color)
-    -- Лёгкая тень: тот же прямоугольник на 1 символ правее/ниже, чёрным
+    -- Тень: только правая и нижняя кромки (не залезает внутрь рамки)
     local sw, sh = gpu.getResolution()
-    local sx, sy = x + 1, y + 1
-    if sx + w - 1 <= sw and sy + h - 1 <= sh and w > 2 and h > 2 then
+    if x + w <= sw and y + h <= sh and w > 2 and h > 2 then
         gpu.setForeground(0x000000)
-        gpu.set(sx, sy, "╔" .. string.rep("═", w - 2) .. "╗")
-        for i = 1, h - 2 do
-            gpu.set(sx, sy + i, "║")
-            gpu.set(sx + w - 1, sy + i, "║")
+        gpu.setBackground(0x000000)
+        for i = 1, h - 1 do
+            gpu.set(x + w, y + i, "║")
         end
-        gpu.set(sx, sy + h - 1, "╚" .. string.rep("═", w - 2) .. "╝")
+        gpu.set(x + 1, y + h, "╚" .. string.rep("═", w - 2) .. "╝")
+        gpu.setBackground(C.bg)
     end
     -- Основная рамка
     gpu.setForeground(color)
@@ -164,7 +164,7 @@ function ui.drawMain(W, H, state)
         ui.drawAdmin(W, H, state.adminList)
         return
     elseif state.currentTab == "STATS" then
-        ui.drawStats(W, H, state.networkInfo or {}, state.storageInfo)
+        ui.drawStats(W, H, state.networkInfo or {}, state.storageInfo, state.energyHistory)
         return
     elseif state.currentTab == "CRAFT" then
         ui.drawCraft(W, H, state.craftables or {}, state.craftPage or 1, state.totalPages or 1)
@@ -214,15 +214,23 @@ function ui.drawMain(W, H, state)
     else
         local startIdx = (state.page - 1) * (H - 10) + 1
         local endIdx = math.min(state.page * (H - 10), #state.items)
-        local maxL = W - 20
+        local maxL = W - 22
         for i = startIdx, endIdx do
             local rowY = 5 + (i - startIdx)
             gpu.setBackground((i % 2 == 0) and C.bg or C.row_alt)
             gpu.fill(3, rowY, W - 5, 1, " ")
             local dLabel = state.items[i].display or state.items[i].label
+
+            -- Цветовой маркер категории (слиток/руда/пыль/еда)
+            local icon, iconColor = ui.getItemIcon(dLabel)
+            if icon then
+                gpu.setForeground(iconColor)
+                gpu.set(3, rowY, icon)
+            end
+
             if unicode.len(dLabel) > maxL then dLabel = unicode.sub(dLabel, 1, maxL - 3) .. "..." end
             gpu.setForeground(C.fg)
-            gpu.set(3, rowY, dLabel .. string.rep(" ", maxL - unicode.len(dLabel)) .. " | " .. string.format("%8d", math.floor(state.items[i].size)))
+            gpu.set(5, rowY, dLabel .. string.rep(" ", maxL - unicode.len(dLabel)) .. " | " .. string.format("%8d", math.floor(state.items[i].size)))
         end
         gpu.setBackground(C.bg)
     end
@@ -459,38 +467,131 @@ local function progressBar(pct, width)
     return "[" .. string.rep("█", filled) .. string.rep("░", width - filled) .. "]"
 end
 
-function ui.drawStats(W, H, info, storage)
+-- ===== Иконки категорий предметов =====
+-- Возвращает символ и цвет маркера (или nil, nil, если категория не опознана).
+local function hasWord(haystack, word)
+    if not haystack or not word then return false end
+    -- Латиница: ищем слово целиком (чтобы "ore" не срабатывал внутри "storage")
+    if word:find("^[%a]+$") then
+        return haystack:find("%f[%a]" .. word .. "%f[%A]") ~= nil
+    end
+    -- Кириллица: простая подстрока (Lua-паттерны не работают с UTF-8 буквами)
+    return haystack:find(word, 1, true) ~= nil
+end
+
+local ICON_RULES = {
+    { color = "admin",  words = { "ingot", "слиток" } },
+    { color = "muted",  words = { "ore", "руда" } },
+    { color = "danger", words = { "dust", "пыль" } },
+    { color = "ok",     words = { "food", "apple", "bread", "cookie", "cake",
+                                  "яблоко", "хлеб", "мясо", "рыба", "пирог", "печенье" } },
+}
+
+function ui.getItemIcon(name)
+    if type(name) ~= "string" or name == "" then return nil, nil end
+    local lower = unicode.lower(name)
+    for _, rule in ipairs(ICON_RULES) do
+        for _, word in ipairs(rule.words) do
+            -- Проверяем и в нижнем регистре, и в исходном (на случай, если
+            -- unicode.lower не умеет в кириллицу в конкретной сборке)
+            if hasWord(lower, word) or hasWord(name, word) then
+                return "■", C[rule.color]
+            end
+        end
+    end
+    return nil, nil
+end
+
+-- ===== График энергии («кардиограмма») =====
+local GRAPH_BLOCKS = { "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" }
+
+-- Рисует столбчатую диаграмму: один столбец на точку истории.
+-- x — левая колонка, yBottom — нижняя строка графика, rows — высота в строках.
+local function drawEnergyGraph(x, yBottom, width, rows, history)
+    for r = 0, rows - 1 do
+        gpu.set(x, yBottom - r, string.rep(" ", width))
+    end
+    if not history or #history == 0 then return end
+
+    local n = math.min(#history, width)
+    local startIdx = #history - n + 1
+    local totalLevels = rows * #GRAPH_BLOCKS
+
+    for col = 1, n do
+        local pct = tonumber(history[startIdx + col - 1]) or 0
+        if pct < 0 then pct = 0 end
+        if pct > 100 then pct = 100 end
+        local lvl = math.floor(pct / 100 * totalLevels + 0.5)
+        if lvl < 1 then lvl = 1 end
+        if lvl > totalLevels then lvl = totalLevels end
+        local remaining = lvl
+        for r = 0, rows - 1 do
+            local cell = math.min(#GRAPH_BLOCKS, remaining)
+            remaining = remaining - cell
+            if cell <= 0 then break end
+            gpu.set(x + col - 1, yBottom - r, GRAPH_BLOCKS[cell])
+        end
+    end
+end
+
+-- Секунды -> ЧЧ:ММ:СС
+local function formatUptime(sec)
+    sec = math.floor(tonumber(sec) or 0)
+    if sec < 0 then sec = 0 end
+    local h = math.floor(sec / 3600)
+    local m = math.floor((sec % 3600) / 60)
+    local s = sec % 60
+    return string.format("%02d:%02d:%02d", h, m, s)
+end
+
+function ui.drawStats(W, H, info, storage, history)
     info = info or {}
     storage = storage or info.storage
-    ui.drawFrame(2, 4, W - 3, H - 8, C.border)
+    history = history or info.energyHistory
+
+    -- Рамка чуть ниже обычной: нижняя строка (H-4) остаётся под время работы
+    ui.drawFrame(2, 4, W - 3, H - 9, C.border)
+    -- Заливаем внутреннюю область, чтобы убрать старый вывод
+    gpu.setBackground(C.bg)
+    gpu.fill(3, 5, W - 5, H - 11, " ")
+
     gpu.setForeground(C.title)
     local title = "--- Статистика МЭ-сети ---"
     gpu.set(math.floor((W - unicode.len(title)) / 2) + 1, 4, title)
 
-    local y = 7
+    -- Внутри рамки доступны строки 5 .. H-7
+    local lastRow = H - 7
+    local y = 5
 
     gpu.setForeground(C.white)
-    gpu.set(5, y, "Всего предметов:")
+    gpu.set(5, y, "Предметов:")
     gpu.setForeground(C.ok)
-    gpu.set(25, y, tostring(info.totalItems or 0))
-    y = y + 2
-
+    gpu.set(16, y, tostring(info.totalItems or 0))
     gpu.setForeground(C.white)
-    gpu.set(5, y, "Типов предметов:")
+    gpu.set(30, y, "Типов:")
     gpu.setForeground(C.ok)
-    gpu.set(25, y, tostring(info.totalTypes or 0))
-    y = y + 2
+    gpu.set(38, y, tostring(info.totalTypes or 0))
+    y = y + 1
 
     if info.energyStored ~= nil and info.energyMax and info.energyMax > 0 then
+        local pct = percentOf(info.energyStored, info.energyMax)
+
         gpu.setForeground(C.white)
         gpu.set(5, y, "Энергия:")
         gpu.setForeground(C.ok)
-        gpu.set(25, y, string.format("%d / %d AE", info.energyStored, info.energyMax))
-        local pct = percentOf(info.energyStored, info.energyMax)
+        gpu.set(25, y, string.format("%d / %d AE (%d%%)", info.energyStored, info.energyMax, pct))
+        y = y + 1
+
         gpu.setForeground(pct >= 20 and C.ok or C.danger)
-        gpu.set(5, y + 1, progressBar(pct, 20) .. " " .. tostring(pct) .. "%")
-        gpu.setForeground(C.fg)
-        y = y + 3
+        gpu.set(5, y, progressBar(pct, 20))
+        y = y + 1
+
+        -- «Кардиограмма» энергии: 3 строки высотой, зелёная
+        if y + 2 <= lastRow then
+            gpu.setForeground(C.ok)
+            drawEnergyGraph(5, y + 2, 20, 3, history)
+            y = y + 3
+        end
     end
 
     -- Диски: объём в байтах и количество типов
@@ -500,11 +601,12 @@ function ui.drawStats(W, H, info, storage)
         local usedTypes  = tonumber(storage.usedTypes) or 0
         local totalTypes = tonumber(storage.totalTypes)
 
-        gpu.setForeground(C.white)
-        gpu.set(5, y, "Диски (Байты):")
+        if y <= lastRow then
+            gpu.setForeground(C.white)
+            gpu.set(5, y, "Диски (Байты):")
+        end
 
         if totalBytes and totalBytes > 0 and storage.estimated ~= true then
-            -- Ёмкость известна: обычный прогресс-бар с процентами
             local pct = percentOf(usedBytes, totalBytes)
             local color = C.ok
             if pct > 95 then
@@ -512,37 +614,66 @@ function ui.drawStats(W, H, info, storage)
             elseif pct >= 80 then
                 color = C.admin -- жёлтый/янтарный
             end
-            gpu.setForeground(color)
-            gpu.set(5, y + 1, progressBar(pct, 20) .. " " .. tostring(pct) .. "%  " ..
-                formatSize(usedBytes) .. " / " .. formatSize(totalBytes))
+            if y + 1 <= lastRow then
+                gpu.setForeground(color)
+                gpu.set(5, y + 1, progressBar(pct, 20) .. " " .. tostring(pct) .. "%  " ..
+                    formatSize(usedBytes) .. " / " .. formatSize(totalBytes))
+            end
         else
-            -- Ёмкость неизвестна: показываем только занятое с пометкой «оценка»
-            gpu.setForeground(C.muted)
-            gpu.set(5, y + 1, formatSize(usedBytes) .. " (оценка занятого)")
+            if y + 1 <= lastRow then
+                gpu.setForeground(C.muted)
+                gpu.set(5, y + 1, formatSize(usedBytes) .. " (оценка занятого)")
+            end
         end
-        y = y + 3
-
-        gpu.setForeground(C.white)
-        gpu.set(5, y, "Диски (Типы):")
-        gpu.setForeground(C.ok)
-        local typesText = tostring(usedTypes)
-        if totalTypes and totalTypes > 0 then
-            typesText = typesText .. " / " .. tostring(totalTypes)
-        end
-        gpu.set(25, y, typesText)
         y = y + 2
+
+        if y <= lastRow then
+            gpu.setForeground(C.white)
+            gpu.set(5, y, "Диски (Типы):")
+            gpu.setForeground(C.ok)
+            local typesText = tostring(usedTypes)
+            if totalTypes and totalTypes > 0 then
+                typesText = typesText .. " / " .. tostring(totalTypes)
+            end
+            gpu.set(25, y, typesText)
+        end
+        y = y + 1
+    end
+
+    -- Крафт-процессоры
+    local crafting = info.crafting
+    if crafting and crafting.totalCpus and crafting.totalCpus > 0 then
+        if y <= lastRow then
+            gpu.setForeground(C.white)
+            gpu.set(5, y, "Крафт-процессоры:")
+            local busy = tonumber(crafting.busyCpus) or 0
+            local total = tonumber(crafting.totalCpus) or 0
+            gpu.setForeground(busy > 0 and C.admin or C.ok)
+            gpu.set(25, y, tostring(busy) .. " / " .. tostring(total))
+        end
+        y = y + 1
     end
 
     if info.cpus then
-        gpu.setForeground(C.white)
-        gpu.set(5, y, "Сопроцессоров:")
-        gpu.setForeground(C.ok)
-        gpu.set(25, y, tostring(info.cpus))
-        y = y + 2
+        if y <= lastRow then
+            gpu.setForeground(C.white)
+            gpu.set(5, y, "Сопроцессоров:")
+            gpu.setForeground(C.ok)
+            gpu.set(25, y, tostring(info.cpus))
+        end
+        y = y + 1
     end
 
     gpu.setForeground(C.muted)
-    gpu.set(5, H - 4, "Автообновление включено (каждые 2 сек)")
+    gpu.set(5, lastRow, "Автообновление включено (каждые 2 сек)")
+
+    -- Время работы компьютера — в самом низу
+    local okUp, up = pcall(computer.uptime)
+    local upText = "Время работы ПК: " .. formatUptime(okUp and up or 0)
+    gpu.setForeground(C.title)
+    gpu.fill(3, H - 4, W - 4, 1, " ")
+    gpu.set(5, H - 4, upText)
+    gpu.setForeground(C.fg)
 end
 
 function ui.drawCraft(W, H, craftables, page, totalPages)
@@ -566,15 +697,22 @@ function ui.drawCraft(W, H, craftables, page, totalPages)
     local perPage = H - 10
     local startIdx = ((page or 1) - 1) * perPage + 1
     local endIdx = math.min((page or 1) * perPage, #craftables)
-    local maxL = W - 6
+    local maxL = W - 8
     for i = startIdx, endIdx do
         local rowY = 5 + (i - startIdx)
         gpu.setBackground((i % 2 == 0) and C.bg or C.row_alt)
         gpu.fill(3, rowY, W - 5, 1, " ")
         local label = craftables[i].display or craftables[i].label or "?"
+
+        local icon, iconColor = ui.getItemIcon(label)
+        if icon then
+            gpu.setForeground(iconColor)
+            gpu.set(3, rowY, icon)
+        end
+
         if unicode.len(label) > maxL then label = unicode.sub(label, 1, maxL - 3) .. "..." end
         gpu.setForeground(C.fg)
-        gpu.set(3, rowY, label)
+        gpu.set(5, rowY, label)
     end
     gpu.setBackground(C.bg)
     gpu.setForeground(C.fg)
