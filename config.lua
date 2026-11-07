@@ -1,6 +1,6 @@
 local config = {}
 
-config.version = "v1.5.3"
+config.version = "v1.5.4"
 
 -- Направления
 config.side_export = "UP"   -- От МЭ к PIM
@@ -16,7 +16,7 @@ config.colors = {
     admin = 0xFFAA00, banned = 0xFF0000,
     muted = 0x888888, warning = 0xAA5500, danger = 0xAA0000,
     disabled = 0x555555, limit = 0x5555AA, overlay = 0x000000,
-    techadmin = 0xFF00FF, row_alt = 0x222222
+    techadmin = 0xFF00FF, row_alt = 0x2A2A2A
 }
 
 -- Оповещения

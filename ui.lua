@@ -229,7 +229,7 @@ function ui.drawMain(W, H, state)
             gpu.setBackground((i % 2 == 0) and C.bg or C.row_alt)
             gpu.fill(3, rowY, W - 5, 1, " ")
 
-            local dLabel = tostring(state.items[i].display or state.items[i].label or "?")
+            local dLabel = api.cleanLabel(tostring(state.items[i].display or state.items[i].label or "?"))
             local icon, iconColor = ui.getItemIcon(dLabel)
             local prefix = icon and (icon .. " ") or "  "
 
@@ -520,25 +520,18 @@ function ui.getItemIcon(name)
 end
 
 -- ===== График энергии («кардиограмма») =====
--- Символы графика по уровню заряда (одна строка, 5 дискретных уровней)
-local GRAPH_LEVELS = {
-    { min = 80, symbol = "█" },
-    { min = 60, symbol = "▇" },
-    { min = 40, symbol = "▆" },
-    { min = 20, symbol = "▅" },
-    { min = 0,  symbol = "▁" },
-}
+-- Полная шкала заполнения: 8 уровней по 12.5% (0-100%)
+local GRAPH_BLOCKS = { "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" }
 
 local function graphSymbol(pct)
     pct = tonumber(pct) or 0
     if pct <= 0 then return " " end
     if pct > 100 then pct = 100 end
-    for _, lvl in ipairs(GRAPH_LEVELS) do
-        if pct > lvl.min or (lvl.min == 0 and pct > 0) then
-            return lvl.symbol
-        end
-    end
-    return " "
+    -- 1..8: 12.5% на уровень
+    local lvl = math.ceil(pct / 100 * #GRAPH_BLOCKS)
+    if lvl < 1 then lvl = 1 end
+    if lvl > #GRAPH_BLOCKS then lvl = #GRAPH_BLOCKS end
+    return GRAPH_BLOCKS[lvl]
 end
 
 -- Рисует однострочный график энергии: один символ на замер истории.
@@ -730,7 +723,7 @@ function ui.drawCraft(W, H, craftables, page, totalPages)
         local rowY = 5 + (i - startIdx)
         gpu.setBackground((i % 2 == 0) and C.bg or C.row_alt)
         gpu.fill(3, rowY, W - 5, 1, " ")
-        local label = tostring(craftables[i].display or craftables[i].label or "?")
+        local label = api.cleanLabel(tostring(craftables[i].display or craftables[i].label or "?"))
 
         local icon, iconColor = ui.getItemIcon(label)
         local prefix = icon and (icon .. " ") or "  "
@@ -773,7 +766,7 @@ function ui.drawModal(W, H, item, qty, mode, canAction, isAdmin)
     
     gpu.setForeground(C.white); gpu.set(mx + 2, my + 2, "Название:")
     gpu.setForeground(C.fg)
-    local n = item.display or item.label
+    local n = api.cleanLabel(tostring(item.display or item.label or "?"))
     if unicode.len(n) > mw - 4 then n = unicode.sub(n, 1, mw - 7) .. "..." end
     gpu.set(mx + 2, my + 3, n)
     

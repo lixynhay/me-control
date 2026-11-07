@@ -13,6 +13,41 @@ local function stripColor(text)
     return text:gsub("§.", "")
 end
 
+-- Убирает «сырую» обёртку ключа локализации из названия предмета:
+--   item.appliedenergistics2.ItemMaterial.CardAdvSpeed.name -> CardAdvSpeed
+--   tile.foo.bar.name                                       -> bar
+-- Также снимает префикс пространства имён (mod:item_name -> item_name),
+-- если человекочитаемого имени так и не нашлось.
+local function cleanLabel(text)
+    if type(text) ~= "string" then return text end
+    local s = text
+
+    -- item.<...>.name / tile.<...>.name
+    s = s:gsub("^item%.", ""):gsub("^tile%.", "")
+    s = s:gsub("%.name$", "")
+
+    -- Если остался «путь» из сегментов — берём последний осмысленный сегмент
+    if s:find("%.") and not s:find("%s") then
+        local last = s:match("([^%.]+)$")
+        if last and last ~= "" then s = last end
+    end
+
+    -- registry-имя вида mod:item_name -> item_name
+    s = s:gsub("^[%w_%-]+:", "")
+
+    -- Подчёркивания -> пробелы, каждое слово с заглавной
+    if s:find("_") and not s:find("%s") then
+        s = s:gsub("_", " ")
+        s = s:gsub("(%a)([%w']*)", function(first, rest)
+            return first:upper() .. rest
+        end)
+    end
+
+    return s
+end
+
+api.cleanLabel = cleanLabel
+
 -- Имя игрока, стоящего на PIM (для логов)
 local function getPimPlayer()
     if not component.isAvailable("pim") then return "Unknown" end
@@ -215,7 +250,7 @@ function api.getCraftables()
                 local key = tostring(itemName) .. "@" .. tostring(dmg)
                 table.insert(list, {
                     label = label,
-                    display = locale.getName(itemName, dmg, label),
+                    display = cleanLabel(locale.getName(itemName, dmg, label)),
                     name = itemName,
                     damage = dmg,
                     size = counts[key] or 0,
@@ -314,7 +349,7 @@ function api.getNetworkItems()
             local lbl = i.label or i.name
             table.insert(list, {
                 label = lbl, 
-                display = locale.getName(i.name, i.damage, lbl),
+                display = cleanLabel(locale.getName(i.name, i.damage, lbl)),
                 size = i.size, 
                 name = i.name, 
                 damage = i.damage,
@@ -358,7 +393,7 @@ function api.getPlayerInventory()
                 if not found then
                     table.insert(inv, {
                         label = itemLabel, 
-                        display = locale.getName(itemName, itemDmg, itemLabel),
+                        display = cleanLabel(locale.getName(itemName, itemDmg, itemLabel)),
                         size = itemCount, 
                         name = itemName, 
                         damage = itemDmg,

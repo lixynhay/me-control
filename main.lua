@@ -347,18 +347,23 @@ while true do
         state.player = tostring(p1)
         state.currentPlayer = state.player
         local pData = db.getPlayer(state.player)
-        
+        local isNew = false
+
         if not pData then
             db.registerPlayer(state.player)
             pData = db.getPlayer(state.player)
+            isNew = true
+        end
+
+        state.isAdmin = db.isAdmin(state.player)
+        state.isTechAdmin = pData and (pData.role == "techadmin") or false
+
+        if isNew then
             setStatus("Новый игрок: " .. state.player)
         else
             setStatus("С возвращением, " .. state.player)
         end
-        
-        state.isAdmin = db.isAdmin(state.player)
-        state.isTechAdmin = pData and (pData.role == "techadmin") or false
-        
+
         -- Проверка бана
         local banned, banInfo = db.checkBan(state.player)
         if banned then
@@ -370,7 +375,11 @@ while true do
         else
             state.isBanned = false
             state.banInfo = nil
-            if state.isAdmin then setStatus("Вы вошли как Админ.") end
+            if state.isTechAdmin then
+                setStatus("Вы вошли как Технический Администратор")
+            elseif state.isAdmin then
+                setStatus("Вы вошли как Админ.")
+            end
             state.currentTab = "ME"
             updateList(); drawScreen()
         end
