@@ -65,10 +65,18 @@ function ui.getBottomLayout(W)
         next    = { x = 36, w = 12 },
         exit    = { x = W - 20, w = 15 }
     }
-    -- «СДАТЬ ВСЁ» сразу после «>>», но не залезая на «ВЫХОД»
-    local dw = 15
+    local rightLimit = L.exit.x - 1
+    -- «ПОИСК» — вплотную перед «ВЫХОД» (влезает уже с 80-колоночного экрана)
+    local searchW = 12
+    local searchX = L.exit.x - searchW
+    if searchX >= L.next.x + L.next.w + 1 then
+        L.search = { x = searchX, w = searchW }
+    end
+    -- «СДАТЬ ВСЁ» — после «>>», если не залезает на «ПОИСК»/«ВЫХОД»
+    local depLimit = L.search and (L.search.x - 1) or rightLimit
     local dx = L.next.x + L.next.w + 2
-    if dx + dw <= L.exit.x - 1 then
+    local dw = 15
+    if dx + dw - 1 <= depLimit then
         L.deposit = { x = dx, w = dw }
     end
     return L
@@ -96,6 +104,9 @@ function ui.drawMain(W, H, state)
     ui.drawButton(bottom.prev.x, H - 2, bottom.prev.w, "<<", false)
     ui.drawButton(bottom.refresh.x, H - 2, bottom.refresh.w, "ОБНОВИТЬ", false)
     ui.drawButton(bottom.next.x, H - 2, bottom.next.w, ">>", false)
+    if bottom.search and (state.currentTab == "ME" or state.currentTab == "INV") then
+        ui.drawButton(bottom.search.x, H - 2, bottom.search.w, "ПОИСК", false, C.ok)
+    end
     if state.currentTab == "INV" and bottom.deposit then
         ui.drawButton(bottom.deposit.x, H - 2, bottom.deposit.w, "СДАТЬ ВСЁ", false, C.warning)
     end
@@ -110,6 +121,19 @@ function ui.drawMain(W, H, state)
     elseif state.currentTab == "MON" then
         ui.drawMonitor(W, H, state.monitorStatus or {})
         return
+    end
+    
+    -- Строка поиска/фильтра (только для списков ME/INV)
+    if state.isSearching then
+        gpu.setForeground(C.title)
+        local s = "Поиск: " .. tostring(state.searchQuery) .. "_"
+        if unicode.len(s) > W - 6 then s = unicode.sub(s, 1, W - 9) .. "..." end
+        gpu.set(3, 3, s)
+    elseif state.searchQuery ~= "" then
+        gpu.setForeground(C.title)
+        local s = "Фильтр: " .. tostring(state.searchQuery) .. " (Esc - сброс)"
+        if unicode.len(s) > W - 6 then s = unicode.sub(s, 1, W - 9) .. "..." end
+        gpu.set(3, 3, s)
     end
     
     ui.drawFrame(2, 4, W - 3, H - 8, C.border)

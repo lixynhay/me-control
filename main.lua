@@ -37,7 +37,10 @@ local state = {
     lastUpdate = 0,
     alertActive = false,
     lastBeep = 0,
-    lastAlertCheck = 0
+    lastAlertCheck = 0,
+    searchQuery = "",
+    isSearching = false,
+    originalItems = {}
 }
 
 local function setStatus(msg, isError)
@@ -48,6 +51,24 @@ local function setStatus(msg, isError)
     gpu.fill(1, H - 1, W, 1, " ")
     gpu.setForeground(isError and config.colors.err or config.colors.ok)
     gpu.set(3, H - 1, msg)
+end
+
+-- Применяет поисковый фильтр к уже загруженному списку (без повторного обращения к МЭ/PIM)
+local function applySearchFilter()
+    if state.searchQuery == "" then
+        state.items = state.originalItems
+    else
+        local q = unicode.lower(state.searchQuery)
+        local filtered = {}
+        for _, it in ipairs(state.originalItems) do
+            if unicode.lower(it.label or ""):find(q, 1, true) then
+                table.insert(filtered, it)
+            end
+        end
+        state.items = filtered
+    end
+    state.totalPages = math.max(1, math.ceil(#state.items / (H - 10)))
+    if state.page > state.totalPages then state.page = state.totalPages end
 end
 
 local function updateList()
@@ -73,6 +94,14 @@ local function updateList()
     elseif state.currentTab == "MON" then
         state.items = {}
         state.monitorStatus = api.getThresholdStatus()
+    end
+    
+    -- Поиск/фильтр по названию (только для ME/INV)
+    if state.currentTab == "ME" or state.currentTab == "INV" then
+        state.originalItems = state.items
+        applySearchFilter()
+    else
+        state.originalItems = {}
     end
     
     if state.currentTab ~= "ADMIN" then
@@ -162,9 +191,34 @@ while true do
         setStatus("Игрок ушел с PIM.", true)
         updateList(); drawScreen()
         
+    elseif eventName == "key_down" then
+        if state.isSearching then
+            local code = tonumber(p3) or 0
+            if code == 28 or code == 1 then
+                -- Enter (28) — применить фильтр и выйти; Esc (1) — выйти и сбросить
+                state.isSearching = false
+                if code == 1 then state.searchQuery = "" end
+                applySearchFilter(); drawScreen()
+            elseif code == 14 then
+                -- Backspace
+                local n = unicode.len(state.searchQuery)
+                if n > 0 then state.searchQuery = unicode.sub(state.searchQuery, 1, n - 1) end
+                applySearchFilter(); drawScreen()
+            elseif p2 and unicode.len(p2) == 1 then
+                -- Печатный символ (буква/цифра/пробел), включая кириллицу
+                local b = p2:byte()
+                if b and b >= 32 then
+                    state.searchQuery = state.searchQuery .. p2
+                    applySearchFilter(); drawScreen()
+                end
+            end
+        end
+        
     elseif eventName == "touch" then
         -- ИСПРАВЛЕНИЕ 1: Для touch p2 - это X, p3 - это Y
         local x, y = p2, p3
+        -- Любой клик выходит из режима поиска (кнопка ПОИСК ниже включит его снова)
+        state.isSearching = false
         
         -- Переключение вкладок
         if y == 2 then
@@ -190,6 +244,11 @@ while true do
             if x >= bottom.prev.x and x < bottom.prev.x + bottom.prev.w then if state.page > 1 then state.page = state.page - 1; drawScreen() end end
             if x >= bottom.refresh.x and x < bottom.refresh.x + bottom.refresh.w then state.lastUpdate = 0; updateList(); drawScreen(); setStatus("Обновлено.") end
             if x >= bottom.next.x and x < bottom.next.x + bottom.next.w then if state.page < state.totalPages then state.page = state.page + 1; drawScreen() end end
+            if bottom.search and (state.currentTab == "ME" or state.currentTab == "INV") and x >= bottom.search.x and x < bottom.search.x + bottom.search.w then
+                state.isSearching = true
+                state.searchQuery = ""
+                applySearchFilter(); drawScreen()
+            end
             if state.currentTab == "INV" and bottom.deposit and x >= bottom.deposit.x and x < bottom.deposit.x + bottom.deposit.w then
                 if not api.isPlayerPresent() then
                     setStatus("Встаньте на PIM для сдачи!", true)
