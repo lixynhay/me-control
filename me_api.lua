@@ -241,28 +241,66 @@ function api.getCraftables()
     return list
 end
 
+-- Безопасно вызывает метод у объекта статуса (userdata/table).
+-- Возвращает true/false, либо nil если метода нет или вызов упал.
+local function tryStatusCall(obj, method)
+    if obj == nil then return nil end
+    local okRef, fn = pcall(function() return obj[method] end)
+    if not okRef or fn == nil then return nil end
+    local okCall, res = pcall(function() return obj[method]() end)
+    if not okCall then return nil end
+    if type(res) == "boolean" then return res end
+    if type(res) == "number" then return res ~= 0 end
+    return nil
+end
+
+-- Разбор объекта статуса крафта (то, что вернул craftable.request()).
+-- Класс CraftingStatus в OC/AE2 отдаёт isDone() и isCanceled(); hasFailed()
+-- есть не во всех сборках, поэтому проверяем его наличие необязательно.
+-- Возвращает таблицу { done, canceled, failed, computing } (nil = метод недоступен).
+function api.getCraftStatus(status)
+    if status == nil then return nil end
+    return {
+        done      = tryStatusCall(status, "isDone"),
+        canceled  = tryStatusCall(status, "isCanceled"),
+        failed    = tryStatusCall(status, "hasFailed"),
+        computing = tryStatusCall(status, "isComputing"),
+    }
+end
+
 -- Отправить запрос на крафт. Принимает либо объект-рецепт, либо элемент списка.
--- Возвращает: true, статус (userdata) | false, текст ошибки
+-- Возвращает: true, "Запрос отправлен", статус (для отслеживания прогресса)
+--          или false, "Ошибка: ..."
 function api.requestCraft(craftableObject, amount)
     local target = craftableObject
     if type(target) == "table" and target.craftable ~= nil then
         target = target.craftable
     end
     if target == nil then
-        return false, "Рецепт недоступен"
+        return false, "Ошибка: рецепт недоступен"
     end
 
     amount = math.floor(tonumber(amount) or 1)
     if amount < 1 then amount = 1 end
 
     local ok, result = pcall(function() return target.request(amount) end)
-    if ok and result ~= nil and result ~= false then
-        return true, result
-    end
     if not ok then
-        return false, cleanError(result)
+        return false, "Ошибка: " .. cleanError(result)
     end
-    return false, "МЭ отклонила запрос на крафт"
+    if result == nil then
+        return false, "Ошибка: МЭ не вернула статус крафта (nil)"
+    end
+    if result == false then
+        return false, "Ошибка: МЭ отклонила запрос на крафт"
+    end
+
+    -- Пробуем сразу понять состояние: если запрос успел провалиться — сообщаем
+    local st = api.getCraftStatus(result)
+    if st and st.failed == true then
+        return false, "Ошибка: крафт сразу провален (нет ресурсов или занят CPU)"
+    end
+
+    return true, "Запрос отправлен", result
 end
 
 -- Получить предметы из МЭ

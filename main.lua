@@ -41,6 +41,8 @@ local state = {
     storageInfo = nil,
     craftables = {},
     craftPage = 1,
+    lastCraftStatus = nil,
+    lastCraftCheck = 0,
     monitorStatus = {},
     lastUpdate = 0,
     alertActive = false,
@@ -271,6 +273,31 @@ while true do
         rs.setOutput(config.alerts.redstoneSide, alertActive and 15 or 0)
     end
     
+    -- Отслеживание статуса последнего крафта (раз в 2 секунды)
+    if state.lastCraftStatus ~= nil and computer.uptime() - (state.lastCraftCheck or 0) > 2 then
+        state.lastCraftCheck = computer.uptime()
+        local st = api.getCraftStatus(state.lastCraftStatus)
+        if st then
+            if st.failed == true then
+                setStatus("Крафт провален (возможно, не хватает ресурсов или CPU занят)", true)
+                state.lastCraftStatus = nil
+            elseif st.done == true then
+                setStatus("Крафт завершен!")
+                state.lastCraftStatus = nil
+                -- Обновляем список/статистику, чтобы показать новые предметы
+                if state.currentTab == "CRAFT" or state.currentTab == "ME" then
+                    updateList(); drawScreen()
+                end
+            elseif st.canceled == true then
+                setStatus("Крафт отменен", true)
+                state.lastCraftStatus = nil
+            end
+        else
+            -- Объект статуса больше не читается — прекращаем слежение
+            state.lastCraftStatus = nil
+        end
+    end
+
     -- Проверка истечения бана раз в 5 секунд
     if state.isBanned and computer.uptime() - (state.lastBanCheck or 0) > 5 then
         state.lastBanCheck = computer.uptime()
@@ -664,11 +691,14 @@ while true do
             if y == my + mh - 2 and x >= mx + 2 and x < mx + 20 then
                 if isCraft then
                     -- «СКРАФТИТЬ»
-                    local ok, res = api.requestCraft(state.selectedItem, state.quantity)
+                    local ok, res, status = api.requestCraft(state.selectedItem, state.quantity)
                     if ok then
+                        state.lastCraftStatus = status
+                        state.lastCraftCheck = 0
                         setStatus("Запрос на крафт отправлен: " .. tostring(state.selectedItem.display or state.selectedItem.label)
                             .. " x" .. tostring(state.quantity))
                     else
+                        state.lastCraftStatus = nil
                         setStatus("Не удалось запросить крафт: " .. tostring(res), true)
                     end
                     state.selectedItem = nil
