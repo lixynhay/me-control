@@ -186,7 +186,7 @@ function db.banPlayer(actorName, targetName, reason, durationMinutes)
         return false, "Недостаточно прав для выполнения операции"
     end
     if not data or not data.players[targetName] then return false, "Игрок не найден" end
-    if targetName == "lixynhay" and actorName ~= "lixynhay" then
+    if targetName == "lixynhay" then
         return false, "Нельзя забанить Технического Администратора"
     end
     local okT, t = pcall(os.time)
@@ -215,7 +215,16 @@ end
 -- Проверить бан: (true, {reason, expires}) если активен, иначе (false, nil).
 -- Истёкший бан автоматически снимается.
 function db.checkBan(name)
-    if name == "lixynhay" then return false, nil end
+    if name == "lixynhay" then
+        -- Иммунитет + самовосстановление роли (на случай старого/битого состояния БД)
+        if data and data.players[name] and data.players[name].role ~= "techadmin" then
+            data.players[name].role = "techadmin"
+            data.players[name].banReason = ""
+            data.players[name].banExpires = 0
+            db.save()
+        end
+        return false, nil
+    end
     if not data or not data.players[name] then return false, nil end
     local p = data.players[name]
     if p.role ~= "banned" then return false, nil end
