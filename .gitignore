@@ -9,3 +9,8 @@ opencode.json
 
 # Бутстрап-установщик держим только локально (не в репозитории)
 getcode.lua
+
+# Секреты (Personal Access Token для приватного репозитория)
+mecontrol.token
+.mecontrol_token
+*.token
