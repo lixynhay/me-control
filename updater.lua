@@ -284,4 +284,50 @@ function updater.run(progressCallback)
     return false, "Часть файлов не обновлена (ошибок: " .. failed .. ")"
 end
 
+-- ================== ПРОВЕРКА ВЕРСИИ ==================
+-- Читает version.txt из репозитория ОДНИМ запросом (без скачивания файлов).
+-- Возвращает строку версии ("v1.11.0") или nil, err.
+function updater.checkRemoteVersion()
+    if not component.isAvailable("internet") then
+        return nil, "Интернет-карта не найдена"
+    end
+    if not internet then
+        return nil, "Библиотека internet недоступна"
+    end
+    local token = readToken()
+    if not token then
+        return nil, "Не найден токен: " .. TOKEN_FILE
+    end
+
+    local headers = {
+        ["Authorization"] = "Bearer " .. token,
+        ["Accept"] = "application/vnd.github.raw",
+        ["User-Agent"] = "oc-me-control",
+    }
+
+    local ok, result = pcall(function()
+        -- Один запрос, без повторов
+        local resp, reqErr = internet.request(urlFor("version.txt"), nil, headers)
+        if not resp then
+            error(tostring(reqErr or "нет связи"), 0)
+        end
+        local body, readErr = readAll(resp)
+        if not body then
+            error(tostring(readErr or "ошибка чтения"), 0)
+        end
+        if looksLikeApiError(body) or body:find("Not Found", 1, true) then
+            error("version.txt недоступен", 0)
+        end
+        local v = body:gsub("%s+", "")
+        if v == "" then
+            error("пустой version.txt", 0)
+        end
+        return v
+    end)
+    if not ok then
+        return nil, tostring(result)
+    end
+    return result
+end
+
 return updater

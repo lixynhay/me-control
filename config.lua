@@ -1,6 +1,10 @@
 local config = {}
 
-config.version = "v1.10.2"
+config.version = "v1.11.0"
+
+-- Смарт-загрузчик (boot.lua): автообновление при старте.
+-- false — boot.lua сразу запускает main.lua без проверки GitHub.
+config.boot = { autoUpdate = true }
 
 -- Направления
 config.side_export = "UP"   -- От МЭ к PIM

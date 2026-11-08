@@ -441,7 +441,7 @@ local function startUpdate()
     drawScreen()
 end
 
--- Перезапуск панели: гарантируем автозапуск main.lua в /home/.shrc, затем shutdown(true)
+-- Перезапуск панели: гарантируем автозапуск boot.lua в /home/.shrc, затем shutdown(true)
 local function restartPanel()
     local shrc = "/home/.shrc"
     local text = ""
@@ -450,11 +450,16 @@ local function restartPanel()
         text = f:read("*a") or ""
         f:close()
     end
-    if not text:find("main.lua", 1, true) then
+    if text:find("main.lua", 1, true) then
+        -- Заменяем старый автозапуск main.lua на boot.lua
+        text = text:gsub("main%.lua", "boot.lua")
+        local w = io.open(shrc, "w")
+        if w then w:write(text); w:close() end
+    elseif not text:find("boot.lua", 1, true) then
         local w = io.open(shrc, "a")
         if w then
             if text ~= "" and text:sub(-1) ~= "\n" then w:write("\n") end
-            w:write("main.lua\n")
+            w:write("boot.lua\n")
             w:close()
         end
     end

@@ -1454,4 +1454,112 @@ function ui.drawModal(W, H, item, qty, mode, canAction, isAdmin)
     ui.drawButton(mx + mw - 14, my + mh - 2, 12, "ЗАКРЫТЬ", false, C.danger)
 end
 
+-- ===== Экран загрузки (boot.lua) =====
+-- opts = {
+--   status = "Проверка обновлений...",  -- текст статуса
+--   progress = 60,                      -- 0..100 (nil — бар не рисуется)
+--   logs = { "строка", ... },           -- последние строки журнала
+--   version = "v1.11.0",                -- версия внизу
+-- }
+function ui.drawBootScreen(W, H, opts)
+    opts = opts or {}
+    local status = tostring(opts.status or "")
+    local progress = opts.progress
+    local logs = opts.logs or {}
+    local version = tostring(opts.version or config.version or "")
+
+    gpu.setBackground(C.bg)
+    gpu.setForeground(C.fg)
+    gpu.fill(1, 1, W, H, " ")
+
+    -- ASCII-арт ME-CONTROL
+    local art = {
+        " __  __ ___    ___ ___  _  _ _____ ___  _   ___  _ ",
+        "|  \\/  | __|  / __/ _ \\| \\| |_   _/ _ \\| | | _ \\| |",
+        "| |\\/| | _|  | (_| (_) | .` | | || (_) | |_|   /| |",
+        "|_|  |_|___|  \\___\\___/|_|\\_| |_| \\___/|___|_|_\\|_|",
+    }
+    local artY = 2
+    if W >= 20 then
+        gpu.setForeground(C.title)
+        for i, line in ipairs(art) do
+            local draw = line
+            if unicode.len(draw) > W - 2 then draw = unicode.sub(draw, 1, W - 2) end
+            local ax = math.floor((W - unicode.len(draw)) / 2) + 1
+            if ax < 1 then ax = 1 end
+            gpu.set(ax, artY + i - 1, draw)
+        end
+    end
+
+    local y = artY + #art + 1
+
+    -- Статус (цвет по смыслу сообщения)
+    local color = C.fg
+    if status:find("актуальна", 1, true) or status:find("завершено", 1, true) then
+        color = C.ok
+    elseif status:find("Доступно обновление", 1, true) then
+        color = C.admin
+    elseif status:find("Ошибка", 1, true) or status:find("Нет связи", 1, true) then
+        color = C.err
+    elseif status:find("Проверка", 1, true) or status:find("Загрузка", 1, true) then
+        color = C.title
+    end
+    gpu.setForeground(color)
+    local st = status
+    if unicode.len(st) > W - 2 then st = unicode.sub(st, 1, W - 5) .. "..." end
+    local stX = math.floor((W - unicode.len(st)) / 2) + 1
+    if stX < 1 then stX = 1 end
+    gpu.set(stX, y, st)
+    y = y + 2
+
+    -- Прогресс-бар (если задан)
+    if progress ~= nil then
+        local pct = math.floor(tonumber(progress) or 0)
+        if pct < 0 then pct = 0 end
+        if pct > 100 then pct = 100 end
+        local barW = 30
+        if barW > W - 12 then barW = W - 12 end
+        if barW < 5 then barW = 5 end
+        local filled = math.floor(pct / 100 * barW + 0.5)
+        if filled < 0 then filled = 0 end
+        if filled > barW then filled = barW end
+        local bar = "[" .. string.rep("█", filled) .. string.rep("░", barW - filled) .. "]"
+        local bx = math.floor((W - unicode.len(bar)) / 2) + 1
+        if bx < 1 then bx = 1 end
+        gpu.setForeground(C.ok)
+        gpu.set(bx, y, bar)
+        gpu.setForeground(C.fg)
+        gpu.set(bx + unicode.len(bar) + 1, y, tostring(pct) .. "%")
+        y = y + 2
+    end
+
+    -- Логи (последние, что влезают над строкой версии)
+    local bottomLimit = H - 1
+    local avail = bottomLimit - y + 1
+    if avail > 0 and #logs > 0 then
+        local shown = math.min(#logs, avail)
+        local startIdx = #logs - shown + 1
+        for i = startIdx, #logs do
+            local line = tostring(logs[i] or "")
+            if unicode.len(line) > W - 4 then line = unicode.sub(line, 1, W - 7) .. "..." end
+            local ry = y + (i - startIdx)
+            if ry <= bottomLimit then
+                gpu.setForeground(line:find("ОШИБКА", 1, true) and C.err or C.muted)
+                gpu.set(3, ry, line)
+            end
+        end
+    end
+
+    -- Версия внизу
+    gpu.setForeground(C.muted)
+    local vt = "ME-Control " .. version
+    if unicode.len(vt) > W - 2 then vt = unicode.sub(vt, 1, W - 5) .. "..." end
+    local vtX = math.floor((W - unicode.len(vt)) / 2) + 1
+    if vtX < 1 then vtX = 1 end
+    gpu.set(vtX, H, vt)
+
+    gpu.setBackground(C.bg)
+    gpu.setForeground(C.fg)
+end
+
 return ui
