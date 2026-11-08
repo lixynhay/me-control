@@ -42,7 +42,7 @@ function ui.drawButton(x, y, w, text, pressed, bg)
     gpu.setForeground(C.fg)
 end
 
-function ui.getTabs(canModerate)
+function ui.getTabs(canModerate, isAdmin)
     local tabs = {
         { id = "ME",    label = " МЭ-сеть " },
         { id = "INV",   label = " Инвентарь " },
@@ -54,16 +54,20 @@ function ui.getTabs(canModerate)
         table.insert(tabs, { id = "LOGS",  label = " Журнал " })
         table.insert(tabs, { id = "ADMIN", label = " Админ " })
     end
+    if isAdmin then
+        table.insert(tabs, { id = "UPD", label = " Обновление " })
+    end
     return tabs
 end
 
-function ui.getTabLayout(W, canModerate)
-    local tabs = ui.getTabs(canModerate)
+function ui.getTabLayout(W, canModerate, isAdmin)
+    local tabs = ui.getTabs(canModerate, isAdmin)
     local totalW = 0
     for _, tab in ipairs(tabs) do totalW = totalW + unicode.len(tab.label) + 2 end
     totalW = totalW - 2
     local startX = math.floor((W - totalW) / 2) + 1
-    
+    if startX < 1 then startX = 1 end
+
     local layout = {}
     local currentX = startX
     for _, tab in ipairs(tabs) do
@@ -98,8 +102,8 @@ function ui.getBottomLayout(W)
     return L
 end
 
-function ui.drawTabs(W, currentTab, canModerate)
-    local layout = ui.getTabLayout(W, canModerate)
+function ui.drawTabs(W, currentTab, canModerate, isAdmin)
+    local layout = ui.getTabLayout(W, canModerate, isAdmin)
     for _, tab in ipairs(layout) do
         gpu.setBackground(currentTab == tab.id and C.tab_active or C.tab_inactive)
         -- OC GPU не умеет жирный шрифт: активная вкладка — ярко-белая, неактивные — приглушённые
@@ -193,7 +197,7 @@ function ui.drawMain(W, H, state)
     if unicode.len(who) > W - 4 then who = unicode.sub(who, 1, W - 7) .. "..." end
     gpu.set(W - unicode.len(who) - 1, 1, who)
     
-    ui.drawTabs(W, state.currentTab, state.canModerate)
+    ui.drawTabs(W, state.currentTab, state.canModerate, state.isAdmin)
     
     -- Нижняя панель кнопок рисуется для всех вкладок (до ветвлений с return)
     local bottom = ui.getBottomLayout(W)
@@ -234,6 +238,9 @@ function ui.drawMain(W, H, state)
         return
     elseif state.currentTab == "MON" then
         ui.drawMonitor(W, H, state.monitorStatus or {})
+        return
+    elseif state.currentTab == "UPD" then
+        ui.drawUpdater(W, H, state.updateLogs or {}, state.isUpdating, state.isUpdateFinished)
         return
     end
     
@@ -579,6 +586,77 @@ function ui.drawMonitor(W, H, statusList)
     
     gpu.setForeground(C.muted)
     gpu.set(3, H - 4, "Автообновление включено (каждые 2 сек)")
+end
+
+-- ===== Вкладка «Обновление» =====
+-- Раскладка кнопок (общая для отрисовки и обработки кликов).
+-- Кнопка «ОБНОВИТЬ» и «ПЕРЕЗАПУСТИТЬ» располагаются на одном месте.
+function ui.getUpdaterLayout(W, H)
+    local bw = 22
+    local bx = math.floor((W - bw) / 2) + 1
+    local by = H - 5
+    return {
+        update  = { x = bx, y = by, w = bw },
+        restart = { x = bx, y = by, w = bw },
+    }
+end
+
+function ui.drawUpdater(W, H, logs, isUpdating, isFinished)
+    logs = logs or {}
+
+    -- Заголовок
+    gpu.setForeground(C.title)
+    local title = "--- Обновление системы ---"
+    gpu.set(math.floor((W - unicode.len(title)) / 2) + 1, 4, title)
+
+    -- Рамка-лог
+    local frameY = 6
+    local frameW = W - 6
+    local frameH = H - 12
+    if frameH < 3 then frameH = 3 end
+    ui.drawFrame(3, frameY, frameW, frameH, C.border)
+
+    -- Строки журнала (показываем последние, что влезают)
+    local innerX = 5
+    local innerY = frameY + 1
+    local innerW = frameW - 4
+    local innerH = frameH - 2
+    if innerW < 4 then innerW = 4 end
+    local startIdx = math.max(1, #logs - innerH + 1)
+    for i = startIdx, #logs do
+        local rowY = innerY + (i - startIdx)
+        local text = tostring(logs[i] or "")
+        if unicode.len(text) > innerW then
+            text = unicode.sub(text, 1, innerW - 3) .. "..."
+        end
+        local color = C.fg
+        if text:find("ОШИБКА", 1, true) or text:find("ПРОПУСК", 1, true) then
+            color = C.err
+        elseif text:find("OK:", 1, true) then
+            color = C.ok
+        end
+        gpu.setForeground(color)
+        gpu.set(innerX, rowY, text)
+    end
+
+    -- Статус / кнопки
+    local layout = ui.getUpdaterLayout(W, H)
+    if isUpdating then
+        gpu.setForeground(C.err)
+        local s = "[ ИДЁТ ОБНОВЛЕНИЕ... ]"
+        gpu.set(math.floor((W - unicode.len(s)) / 2) + 1, layout.update.y, s)
+    elseif isFinished then
+        ui.drawButton(layout.restart.x, layout.restart.y, layout.restart.w, "ПЕРЕЗАПУСТИТЬ", false, C.ok)
+    else
+        ui.drawButton(layout.update.x, layout.update.y, layout.update.w, "ОБНОВИТЬ", false, C.ok)
+    end
+
+    -- Подсказка
+    gpu.setForeground(C.muted)
+    gpu.set(5, H - 3, "Требуется интернет-карта и токен /home/mecontrol.token")
+
+    gpu.setBackground(C.bg)
+    gpu.setForeground(C.fg)
 end
 
 function ui.drawBannedScreen(W, H, banInfo)

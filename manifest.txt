@@ -8,4 +8,5 @@ locale_generated.lua
 test_craft.lua
 test_energy.lua
 medit.lua
+updater.lua
 version.txt

@@ -16,6 +16,7 @@ local config = require("config")
 local ui = require("ui")
 local api = require("me_api")
 local db = require("db")
+local updater = require("updater")
 
 if not component.isAvailable("me_interface") or not component.isAvailable("pim") then
     print("Ошибка: ME Interface или PIM не найден!") os.exit()
@@ -70,7 +71,10 @@ local state = {
     logFilter = "all",
     logClearArmed = false,
     logClearTime = 0,
-    originalLogs = {}
+    originalLogs = {},
+    updateLogs = {},
+    isUpdating = false,
+    isUpdateFinished = false
 }
 
 -- ===== Статус-бар =====
@@ -312,6 +316,9 @@ local function updateList()
         state.items = {}
         state.originalLogs = db.getLogs()
         applyLogSearchFilter()
+    elseif state.currentTab == "UPD" then
+        -- Вкладка «Обновление» данных из МЭ не читает — рисуется ui.drawUpdater
+        state.items = {}
     end
     
     -- Поиск/фильтр по названию (только для ME/INV)
@@ -375,6 +382,55 @@ local function switchTab(tabId)
     state.logClearArmed = false
     updateList(); drawScreen()
     return true
+end
+
+-- ===== Вкладка «Обновление» =====
+local UPDATE_LOG_MAX = 200
+
+-- Запуск обновления из GitHub. Доступно только на вкладке UPD (для админов).
+local function startUpdate()
+    if state.isUpdating then return end
+    state.isUpdating = true
+    state.isUpdateFinished = false
+    state.updateLogs = {}
+    drawScreen()
+
+    local ok, res = updater.run(function(text)
+        state.updateLogs[#state.updateLogs + 1] = tostring(text)
+        while #state.updateLogs > UPDATE_LOG_MAX do table.remove(state.updateLogs, 1) end
+        drawScreen()
+    end)
+
+    state.isUpdating = false
+    state.isUpdateFinished = true
+    if ok then
+        state.updateLogs[#state.updateLogs + 1] = "Готово: " .. tostring(res or "")
+        notify("Обновление завершено. Нажмите «ПЕРЕЗАПУСТИТЬ»", "ok")
+    else
+        state.updateLogs[#state.updateLogs + 1] = "ОШИБКА: " .. tostring(res or "неизвестно")
+        notify("Ошибка обновления: " .. tostring(res or ""), "err")
+    end
+    drawScreen()
+end
+
+-- Перезапуск панели: гарантируем автозапуск main.lua в /home/.shrc, затем reboot
+local function restartPanel()
+    local shrc = "/home/.shrc"
+    local text = ""
+    local f = io.open(shrc, "r")
+    if f then
+        text = f:read("*a") or ""
+        f:close()
+    end
+    if not text:find("main.lua", 1, true) then
+        local w = io.open(shrc, "a")
+        if w then
+            if text ~= "" and text:sub(-1) ~= "\n" then w:write("\n") end
+            w:write("main.lua\n")
+            w:close()
+        end
+    end
+    computer.reboot()
 end
 
 local initialPlayer
@@ -744,7 +800,7 @@ while true do
         
         -- Переключение вкладок
         if y == 2 then
-            local layout = ui.getTabLayout(W, state.canModerate)
+            local layout = ui.getTabLayout(W, state.canModerate, state.isAdmin)
             local newTab = state.currentTab
             
             for _, tab in ipairs(layout) do
@@ -813,7 +869,13 @@ while true do
                     if state.craftPage > 1 then state.craftPage = state.craftPage - 1; drawScreen() end
                 elseif state.page > 1 then state.page = state.page - 1; drawScreen() end
             end
-            if x >= bottom.refresh.x and x < bottom.refresh.x + bottom.refresh.w then state.lastUpdate = 0; updateList(); drawScreen(); setStatus("Данные обновлены") end
+            if x >= bottom.refresh.x and x < bottom.refresh.x + bottom.refresh.w then
+                if state.currentTab == "UPD" then
+                    startUpdate()
+                else
+                    state.lastUpdate = 0; updateList(); drawScreen(); setStatus("Данные обновлены")
+                end
+            end
             if x >= bottom.next.x and x < bottom.next.x + bottom.next.w then
                 if state.currentTab == "LOGS" then
                     if state.logsPage < state.logsTotalPages then state.logsPage = state.logsPage + 1; drawScreen() end
@@ -845,7 +907,23 @@ while true do
                 end
             end
             -- «ВЫХОД» обработан выше (только для админа)
-            
+
+        elseif state.currentTab == "UPD" then
+            -- Кнопки вкладки «Обновление»
+            local L = ui.getUpdaterLayout(W, H)
+            if state.isUpdating then
+                setStatus("Обновление уже идёт…", "warn")
+            elseif state.isUpdateFinished then
+                if x >= L.restart.x and x < L.restart.x + L.restart.w and y == L.restart.y then
+                    setStatus("Перезапуск панели…", "info")
+                    restartPanel()
+                end
+            else
+                if x >= L.update.x and x < L.update.x + L.update.w and y == L.update.y then
+                    startUpdate()
+                end
+            end
+
         elseif state.currentTab == "ADMIN" and state.canModerate then
             -- Окно управления игроком (бан / роль / персональные права)
             local L = ui.getAdminBanLayout(W, H)
