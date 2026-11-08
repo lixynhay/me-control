@@ -110,6 +110,65 @@ function ui.drawTabs(W, currentTab, canModerate)
     gpu.setForeground(C.fg)
 end
 
+-- ===== Плавающие уведомления (Toasts) =====
+local TOAST_COLORS = {
+    ok   = { border = 0x00AA00, text = 0xFFFFFF, icon = "+" },
+    err  = { border = 0xFF5555, text = 0xFFFFFF, icon = "!" },
+    warn = { border = 0xFFAA00, text = 0xFFFFFF, icon = "!" },
+    info = { border = 0x00AAFF, text = 0xFFFFFF, icon = "i" },
+}
+
+-- notifications: массив { text = "...", type = "ok"|"err"|"warn", time = uptime }
+-- Рисуются плашками в правом верхнем углу, поверх интерфейса.
+function ui.drawToasts(W, H, notifications)
+    if not notifications or #notifications == 0 then return end
+
+    local boxW = 28
+    if boxW > W - 6 then boxW = W - 6 end
+    local boxH = 3
+    local x = W - boxW - 3
+    local y0 = 4
+
+    local maxToasts = math.floor((H - y0 - 3) / boxH)
+    if maxToasts < 1 then return end
+
+    -- Показываем самые свежие (последние в очереди)
+    local first = math.max(1, #notifications - maxToasts + 1)
+
+    for idx = first, #notifications do
+        local n = notifications[idx]
+        local style = TOAST_COLORS[n.type] or TOAST_COLORS.info
+        local y = y0 + (idx - first) * boxH
+
+        -- Непрозрачная подложка, чтобы не сливаться с фоном
+        gpu.setBackground(C.modal)
+        gpu.setForeground(style.border)
+        gpu.fill(x, y, boxW, boxH, " ")
+
+        -- Рамка
+        gpu.set(x, y, "╔" .. string.rep("═", boxW - 2) .. "╗")
+        for i = 1, boxH - 2 do
+            gpu.set(x, y + i, "║")
+            gpu.set(x + boxW - 1, y + i, "║")
+        end
+        gpu.set(x, y + boxH - 1, "╚" .. string.rep("═", boxW - 2) .. "╝")
+
+        -- Текст: [иконка] сообщение
+        local text = tostring(n.text or "")
+        local maxLen = boxW - 7
+        if unicode.len(text) > maxLen then
+            text = unicode.sub(text, 1, maxLen - 3) .. "..."
+        end
+        gpu.setForeground(style.border)
+        gpu.set(x + 2, y + 1, "[" .. style.icon .. "]")
+        gpu.setForeground(style.text)
+        gpu.set(x + 6, y + 1, text)
+    end
+
+    gpu.setBackground(C.bg)
+    gpu.setForeground(C.fg)
+end
+
 function ui.drawMain(W, H, state)
     gpu.setBackground(C.bg)
     gpu.fill(1, 1, W, H, " ")
@@ -277,6 +336,9 @@ end
 -- Админ панель (список игроков)
 function ui.drawAdmin(W, H, adminList)
     ui.drawFrame(2, 4, W - 3, H - 8, C.border)
+    -- Очищаем список, чтобы не оставались строки от других вкладок
+    gpu.setBackground(C.bg)
+    gpu.fill(3, 5, W - 5, H - 10, " ")
     gpu.setForeground(C.title)
     gpu.set(3, 5, "Игрок")
     gpu.set(W - 20, 5, "Роль")
@@ -306,18 +368,53 @@ function ui.drawAdmin(W, H, adminList)
     gpu.set(3, H - 4, "Выберите игрока, чтобы изменить роль или выдать бан")
 end
 
--- Окно управления игроком в админке (роль / бан / персональные права) — 58x19
--- opts = { role = "...", text = "причина", perms = { canWithdraw=..., canDeposit=..., canCraft=... } }
+-- Форматирует время лога как ЧЧ:ММ (или дату, если запись не за сегодня)
+local function formatLogTime(ts)
+    ts = tonumber(ts) or 0
+    if ts <= 0 then return "--:--" end
+    local now = os.time and tonumber(os.time()) or 0
+    local today = os.date and os.date("%d.%m", now) or nil
+    local stampDay = os.date and os.date("%d.%m", ts) or nil
+    local fmt = (today and stampDay and today ~= stampDay) and "%d.%m %H:%M" or "%H:%M"
+    if os.date then
+        local ok, s = pcall(os.date, fmt, ts)
+        if ok and s then return s end
+    end
+    return "--:--"
+end
+
+-- Строка истории: "[12:30] Сдал 64x Iron Ingot"
+local function formatLogLine(entry)
+    local action = entry.action == "put" and "Сдал" or "Взял"
+    local amount = math.floor(tonumber(entry.amount) or 0)
+    local item = tostring(entry.item or "?")
+    return "[" .. formatLogTime(entry.time) .. "] " .. action .. " " .. amount .. "x " .. item
+end
+
+local function logActionColor(action)
+    if action == "put" then return C.ok end
+    if action == "take" then return C.warning end
+    return C.fg
+end
+
+-- Окно управления игроком в админке (роль / права / статистика / история) — 58x22
+-- opts = {
+--   role = "...", text = "причина",
+--   perms = { canWithdraw, canDeposit, canCraft },
+--   totalActions = N, lastSeen = ts,
+--   history = { лог-записи }  -- до 5, свежие первыми
+-- }
 function ui.drawAdminBan(W, H, targetName, opts)
     opts = opts or {}
     local text = opts.text or ""
     local role = opts.role or "user"
     local perms = opts.perms or {}
+    local history = opts.history or {}
 
     gpu.setBackground(0x000000)
     gpu.fill(1, 1, W, H, " ")
 
-    local mw, mh = 58, 19
+    local mw, mh = 58, 22
     local mx = math.floor((W - mw) / 2) + 1
     local my = math.floor((H - mh) / 2) + 1
 
@@ -340,13 +437,13 @@ function ui.drawAdminBan(W, H, targetName, opts)
 
     -- Роль
     gpu.setForeground(C.white)
-    gpu.set(mx + 2, my + 3, "Роль:")
+    gpu.set(mx + 2, my + 2, "Роль:")
     gpu.setForeground(C.ok)
-    gpu.set(mx + 9, my + 3, ui.roleLabel(role))
+    gpu.set(mx + 9, my + 2, ui.roleLabel(role))
 
     -- Персональные права: три тумблера в одной строке
     gpu.setForeground(C.white)
-    gpu.set(mx + 2, my + 5, "Права:")
+    gpu.set(mx + 2, my + 4, "Права:")
 
     local function permButton(x, y, w, label, enabled)
         local stateText = enabled and "ВКЛ" or "ВЫКЛ"
@@ -354,23 +451,59 @@ function ui.drawAdminBan(W, H, targetName, opts)
         ui.drawButton(x, y, w, label .. ":" .. stateText, false, bgColor)
     end
 
-    permButton(mx + 2,  my + 6, 18, "ЗАБОР", perms.canWithdraw ~= false)
-    permButton(mx + 21, my + 6, 18, "СДАЧА", perms.canDeposit ~= false)
-    permButton(mx + 40, my + 6, 16, "КРАФТ", perms.canCraft ~= false)
+    permButton(mx + 2,  my + 5, 18, "ЗАБОР", perms.canWithdraw ~= false)
+    permButton(mx + 21, my + 5, 18, "СДАЧА", perms.canDeposit ~= false)
+    permButton(mx + 40, my + 5, 16, "КРАФТ", perms.canCraft ~= false)
 
-    -- Поле ввода причины бана
+    -- Статистика профиля
     gpu.setForeground(C.white)
-    gpu.set(mx + 2, my + 9, "Причина бана:")
+    gpu.set(mx + 2, my + 7, "Статистика:")
+    gpu.setForeground(C.muted)
+    gpu.set(mx + 2, my + 8, "Всего действий:")
+    gpu.setForeground(C.fg)
+    gpu.set(mx + 19, my + 8, tostring(math.floor(tonumber(opts.totalActions) or 0)))
+
+    gpu.setForeground(C.muted)
+    gpu.set(mx + 2, my + 9, "Последняя активность:")
+    gpu.setForeground(C.fg)
+    local lastSeen = tonumber(opts.lastSeen) or 0
+    gpu.set(mx + 24, my + 9, lastSeen > 0 and formatLogTime(lastSeen) or "Не заходил")
+
+    -- Последние 5 действий
+    gpu.setForeground(C.white)
+    gpu.set(mx + 2, my + 11, "Последние 5 действий:")
+
+    local rowY = my + 12
+    if #history == 0 then
+        gpu.setForeground(C.muted)
+        gpu.set(mx + 3, rowY, "Нет недавних действий")
+    else
+        local maxLen = mw - 6
+        for i = 1, math.min(5, #history) do
+            local e = history[i]
+            local line = formatLogLine(e)
+            if unicode.len(line) > maxLen then
+                line = unicode.sub(line, 1, maxLen - 3) .. "..."
+            end
+            gpu.setForeground(logActionColor(e.action))
+            gpu.set(mx + 3, rowY + (i - 1), line)
+        end
+    end
+
+    -- Поле ввода причины бана (ниже истории: 5 строк от my+12 до my+16)
+    local reasonY = my + 17
+    gpu.setForeground(C.white)
+    gpu.set(mx + 2, reasonY, "Причина бана:")
 
     gpu.setBackground(0x111111)
-    gpu.fill(mx + 2, my + 10, mw - 4, 1, " ")
+    gpu.fill(mx + 2, reasonY + 1, mw - 4, 1, " ")
 
     gpu.setForeground(C.ok)
     local displayText = tostring(text or "") .. "_"
     if unicode.len(displayText) > mw - 5 then
         displayText = unicode.sub(displayText, unicode.len(displayText) - (mw - 6), unicode.len(displayText))
     end
-    gpu.set(mx + 3, my + 10, displayText)
+    gpu.set(mx + 3, reasonY + 1, displayText)
 
     -- Кнопки внизу
     local btnY = my + mh - 2
@@ -385,14 +518,14 @@ end
 
 -- Геометрия кнопок окна игрока (общая для отрисовки и обработки кликов)
 function ui.getAdminBanLayout(W, H)
-    local mw, mh = 58, 19
+    local mw, mh = 58, 22
     local mx = math.floor((W - mw) / 2) + 1
     local my = math.floor((H - mh) / 2) + 1
     return {
         mx = mx, my = my, mw = mw, mh = mh,
-        withdraw = { x = mx + 2,  y = my + 6, w = 18 },
-        deposit  = { x = mx + 21, y = my + 6, w = 18 },
-        craft    = { x = mx + 40, y = my + 6, w = 16 },
+        withdraw = { x = mx + 2,  y = my + 5, w = 18 },
+        deposit  = { x = mx + 21, y = my + 5, w = 18 },
+        craft    = { x = mx + 40, y = my + 5, w = 16 },
         ban      = { x = mx + 2,      y = my + mh - 2, w = 16 },
         role     = { x = mx + 20,     y = my + mh - 2, w = 12 },
         unban    = { x = mx + 33,     y = my + mh - 2, w = 11 },
@@ -514,12 +647,6 @@ local function logActionLabel(action)
     if action == "put" then return "Сдал" end
     if action == "take" then return "Взял" end
     return tostring(action or "?")
-end
-
-local function logActionColor(action)
-    if action == "put" then return C.ok end
-    if action == "take" then return C.warning end
-    return C.fg
 end
 
 local LOG_FILTERS = {

@@ -37,6 +37,7 @@ local state = {
     items = {}, page = 1, totalPages = 1, selectedItem = nil, quantity = 1,
     currentTab = "ME", player = nil, currentPlayer = nil, isAdmin = false, canModerate = false, adminList = {},
     statusMsg = "", statusErr = false, statusLevel = "ok",
+    notifications = {},
     networkInfo = {},
     storageInfo = nil,
     energyHistory = {},
@@ -111,6 +112,43 @@ local function setStatus(msg, level)
     gpu.fill(1, H - 1, W, 1, " ")
     gpu.setForeground(STATUS_COLOR[lvl] or config.colors.ok)
     gpu.set(3, H - 1, msg)
+end
+
+-- ===== Плавающие уведомления (toasts) =====
+local TOAST_LIFETIME = 4      -- секунд
+local TOAST_MAX = 5           -- одновременно в очереди
+
+local function addToast(text, toastType)
+    local lvl = normalizeLevel(toastType)
+    local list = state.notifications
+    list[#list + 1] = {
+        text = tostring(text or ""),
+        type = lvl,
+        time = computer.uptime(),
+    }
+    while #list > TOAST_MAX do table.remove(list, 1) end
+end
+
+-- Убирает устаревшие уведомления. Возвращает true, если что-то удалили.
+local function pruneToasts()
+    local list = state.notifications
+    local now = computer.uptime()
+    local changed = false
+    for i = #list, 1, -1 do
+        if now - (tonumber(list[i].time) or 0) > TOAST_LIFETIME then
+            table.remove(list, i)
+            changed = true
+        end
+    end
+    return changed
+end
+
+-- Статус-бар + всплывающее уведомление одним вызовом
+local function notify(msg, level)
+    setStatus(msg, level)
+    addToast(msg, level)
+    -- Сразу показываем плашку, не дожидаясь следующей перерисовки
+    pcall(ui.drawToasts, W, H, state.notifications)
 end
 
 -- Применяет поисковый фильтр к уже загруженному списку (без повторного обращения к МЭ/PIM).
@@ -237,7 +275,7 @@ local function drawScreen()
         return
     end
     ui.drawMain(W, H, state)
-    -- Окно управления игроком (роль / бан / права) поверх админки
+    -- Окно управления игроком (роль / права / статистика) поверх админки
     if state.currentTab == "ADMIN" and state.adminTarget then
         local pd = db.getPlayer(state.adminTarget)
         ui.drawAdminBan(W, H, state.adminTarget, {
@@ -248,8 +286,13 @@ local function drawScreen()
                 canDeposit  = pd and pd.canDeposit ~= false,
                 canCraft    = pd and pd.canCraft ~= false,
             },
+            totalActions = pd and pd.totalActions or 0,
+            lastSeen = pd and pd.lastSeen or 0,
+            history = db.getLogsForPlayer(state.adminTarget, 5),
         })
     end
+    -- Плавающие уведомления поверх всего
+    ui.drawToasts(W, H, state.notifications)
     -- После отрисовки основного экрана принудительно рисуем статус, чтобы он не исчез
     gpu.setBackground(config.colors.bg)
     gpu.fill(1, H - 1, W, 1, " ")
@@ -332,17 +375,17 @@ while true do
         local st = api.getCraftStatus(state.lastCraftStatus)
         if st then
             if st.failed == true then
-                setStatus("Крафт провален: не хватает ресурсов или занят CPU", "err")
+                notify("Крафт провален: не хватает ресурсов или занят CPU", "err")
                 state.lastCraftStatus = nil
             elseif st.done == true then
-                setStatus("Крафт завершён")
+                notify("Крафт завершён")
                 state.lastCraftStatus = nil
                 -- Обновляем список/статистику, чтобы показать новые предметы
                 if state.currentTab == "CRAFT" or state.currentTab == "ME" then
                     updateList(); drawScreen()
                 end
             elseif st.canceled == true then
-                setStatus("Крафт отменён", "warn")
+                notify("Крафт отменён", "warn")
                 state.lastCraftStatus = nil
             end
         else
@@ -370,6 +413,11 @@ while true do
     -- Ловим все события; фильтрация выполняется ниже по eventName
     local eventName, p1, p2, p3, p4, p5 = event.pull(0.1)
     if eventName == "interrupted" then break end
+
+    -- Убираем устаревшие всплывающие уведомления (живут 4 секунды)
+    if #state.notifications > 0 and pruneToasts() then
+        drawScreen()
+    end
     
     -- Автообновление статистики и монитора раз в 2 секунды (не трогаем открытую карточку)
     if state.selectedItem == nil and (state.currentTab == "STATS" or state.currentTab == "MON") and computer.uptime() - state.lastUpdate > 2 then
@@ -411,9 +459,9 @@ while true do
         state.isTechAdmin = pData and (pData.role == "techadmin") or false
 
         if isNew then
-            setStatus("Новый игрок: " .. state.player)
+            notify("Новый игрок: " .. state.player)
         else
-            setStatus("С возвращением, " .. state.player)
+            notify("С возвращением, " .. state.player)
         end
 
         -- Проверка бана
@@ -428,9 +476,9 @@ while true do
             state.isBanned = false
             state.banInfo = nil
             if state.isTechAdmin then
-                setStatus("Вы вошли как Технический Администратор")
+                notify("Вы вошли как Технический Администратор")
             elseif state.isAdmin then
-                setStatus("Вы вошли как администратор")
+                notify("Вы вошли как администратор")
             end
             state.currentTab = "ME"
             updateList(); drawScreen()
@@ -517,9 +565,9 @@ while true do
                 if reason == "" then reason = "Без причины" end
                 local okB, bErr = db.banPlayer(state.player, state.adminTarget, reason, 0)
                 if okB then
-                    setStatus("Игрок " .. state.adminTarget .. " забанен")
+                    notify("Игрок " .. state.adminTarget .. " забанен")
                 else
-                    setStatus(tostring(bErr or "Не удалось забанить игрока"), "err")
+                    notify(tostring(bErr or "Не удалось забанить игрока"), "err")
                 end
                 state.adminTarget = nil
                 state.banReasonText = ""
@@ -650,7 +698,7 @@ while true do
                 state.logClearArmed = false
                 state.logsPage = 1
                 updateList(); drawScreen()
-                setStatus("Журнал операций очищен")
+                notify("Журнал операций очищен")
             else
                 state.logClearArmed = true
                 state.logClearTime = now
@@ -724,7 +772,7 @@ while true do
                     local moved, msg = api.depositAll()
                     updateList(); drawScreen()
                     local isWarn = (moved == 0) or (msg and msg:find("ВНИМАНИЕ", 1, true) ~= nil)
-                    setStatus(msg, isWarn and "warn" or "ok")
+                    notify(msg, isWarn and "warn" or "ok")
                 end
             end
             -- «ВЫХОД» обработан выше (только для админа)
@@ -740,27 +788,27 @@ while true do
                 if inRect(L.withdraw) then
                     local okP, res = db.setPermission(state.player, state.adminTarget, "canWithdraw", nil)
                     if okP then
-                        setStatus("Забор для " .. state.adminTarget .. ": " .. (res and "разрешён" or "запрещён"))
+                        notify("Забор для " .. state.adminTarget .. ": " .. (res and "разрешён" or "запрещён"))
                     else
-                        setStatus(tostring(res), "err")
+                        notify(tostring(res), "err")
                     end
                     updateList(); drawScreen()
 
                 elseif inRect(L.deposit) then
                     local okP, res = db.setPermission(state.player, state.adminTarget, "canDeposit", nil)
                     if okP then
-                        setStatus("Сдача для " .. state.adminTarget .. ": " .. (res and "разрешена" or "запрещена"))
+                        notify("Сдача для " .. state.adminTarget .. ": " .. (res and "разрешена" or "запрещена"))
                     else
-                        setStatus(tostring(res), "err")
+                        notify(tostring(res), "err")
                     end
                     updateList(); drawScreen()
 
                 elseif inRect(L.craft) then
                     local okP, res = db.setPermission(state.player, state.adminTarget, "canCraft", nil)
                     if okP then
-                        setStatus("Крафт для " .. state.adminTarget .. ": " .. (res and "разрешён" or "запрещён"))
+                        notify("Крафт для " .. state.adminTarget .. ": " .. (res and "разрешён" or "запрещён"))
                     else
-                        setStatus(tostring(res), "err")
+                        notify(tostring(res), "err")
                     end
                     updateList(); drawScreen()
 
@@ -769,9 +817,9 @@ while true do
                     if reason == "" then reason = "Без причины" end
                     local okB, bErr = db.banPlayer(state.player, state.adminTarget, reason, 0)
                     if okB then
-                        setStatus("Игрок " .. state.adminTarget .. " забанен")
+                        notify("Игрок " .. state.adminTarget .. " забанен")
                     else
-                        setStatus(tostring(bErr or "Не удалось забанить игрока"), "err")
+                        notify(tostring(bErr or "Не удалось забанить игрока"), "err")
                     end
                     state.adminTarget = nil
                     state.banReasonText = ""
@@ -805,9 +853,9 @@ while true do
                             okR, rErr = db.setRole(state.player, state.adminTarget, newRole)
                         end
                         if okR then
-                            setStatus("Роль игрока " .. state.adminTarget .. ": " .. ui.roleLabel(newRole))
+                            notify("Роль игрока " .. state.adminTarget .. ": " .. ui.roleLabel(newRole))
                         else
-                            setStatus(tostring(rErr or "Не удалось изменить роль"), "err")
+                            notify(tostring(rErr or "Не удалось изменить роль"), "err")
                         end
                     end
                     updateList(); drawScreen()
@@ -815,9 +863,9 @@ while true do
                 elseif inRect(L.unban) then
                     local okU, uErr = db.unbanPlayer(state.adminTarget)
                     if okU then
-                        setStatus("Игрок " .. state.adminTarget .. " разбанен")
+                        notify("Игрок " .. state.adminTarget .. " разбанен")
                     else
-                        setStatus("Не удалось разбанить игрока", "err")
+                        notify("Не удалось разбанить игрока", "err")
                     end
                     updateList(); drawScreen()
 
@@ -874,7 +922,7 @@ while true do
                             .. " x" .. tostring(state.quantity))
                     else
                         state.lastCraftStatus = nil
-                        setStatus("Не удалось запросить крафт: " .. tostring(res), "err")
+                        notify("Не удалось запросить крафт: " .. tostring(res), "err")
                     end
                     state.selectedItem = nil
                     updateList(); drawScreen()
@@ -892,7 +940,7 @@ while true do
                         else
                             ok, msg = api.pushFromPlayer(state.selectedItem, state.quantity)
                         end
-                        setStatus(msg, ok and "ok" or "err")
+                        notify(msg, ok and "ok" or "err")
                     end
                     os.sleep(1.5); state.selectedItem = nil; updateList(); drawScreen()
                 end

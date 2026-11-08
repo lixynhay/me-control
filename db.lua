@@ -95,6 +95,9 @@ function db.load()
                     if p.canWithdraw == nil then p.canWithdraw = true end
                     if p.canDeposit == nil then p.canDeposit = true end
                     if p.canCraft == nil then p.canCraft = true end
+                    -- Миграция: статистика профиля (v1.7.1)
+                    if p.totalActions == nil then p.totalActions = 0 end
+                    if p.lastSeen == nil then p.lastSeen = 0 end
                 end
             end
         end
@@ -118,9 +121,20 @@ function db.load()
     
     -- Технический администратор: роль всегда techadmin, аккаунт создаётся при необходимости
     if data.players["lixynhay"] then
-        data.players["lixynhay"].role = "techadmin"
+        local p = data.players["lixynhay"]
+        p.role = "techadmin"
+        if p.canWithdraw == nil then p.canWithdraw = true end
+        if p.canDeposit == nil then p.canDeposit = true end
+        if p.canCraft == nil then p.canCraft = true end
+        if p.totalActions == nil then p.totalActions = 0 end
+        if p.lastSeen == nil then p.lastSeen = 0 end
     else
-        data.players["lixynhay"] = { role = "techadmin", banReason = "", banExpires = 0 }
+        data.players["lixynhay"] = {
+            role = "techadmin",
+            canWithdraw = true, canDeposit = true, canCraft = true,
+            totalActions = 0, lastSeen = 0,
+            banReason = "", banExpires = 0,
+        }
     end
     db.save()
 end
@@ -153,6 +167,8 @@ function db.registerPlayer(name)
             canWithdraw = true,
             canDeposit = true,
             canCraft = true,
+            totalActions = 0,
+            lastSeen = 0,
             banReason = "",
             banExpires = 0,
         }
@@ -337,7 +353,31 @@ function db.addLog(player, action, item, amount)
     if #data.logs > 200 then
         table.remove(data.logs)
     end
+
+    -- Обновляем статистику профиля игрока
+    if player and data.players and data.players[player] then
+        local p = data.players[player]
+        p.totalActions = (tonumber(p.totalActions) or 0) + 1
+        p.lastSeen = time
+    end
+
     db.save()
+end
+
+-- Последние N действий конкретного игрока (свежие первыми)
+function db.getLogsForPlayer(name, limit)
+    local out = {}
+    if not name or not data or not data.logs then return out end
+    limit = math.floor(tonumber(limit) or 5)
+    if limit <= 0 then return out end
+
+    for _, e in ipairs(data.logs) do
+        if e and e.player == name then
+            out[#out + 1] = e
+            if #out >= limit then break end
+        end
+    end
+    return out
 end
 
 -- Получить массив логов (свежие первыми)
