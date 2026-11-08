@@ -7,4 +7,5 @@ locale.lua
 locale_generated.lua
 test_craft.lua
 test_energy.lua
+medit.lua
 version.txt
