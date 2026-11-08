@@ -1,6 +1,6 @@
 local config = {}
 
-config.version = "v1.9.1"
+config.version = "v1.9.2"
 
 -- Направления
 config.side_export = "UP"   -- От МЭ к PIM

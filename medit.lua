@@ -9,8 +9,12 @@
 --   Esc              — то же, что Ctrl+Q
 --
 -- Навигация: стрелки, PageUp/PageDown, Home/End.
+-- Мышь: колесо (scroll) прокручивает текст и удерживает курсор в видимой зоне.
 -- Ввод: обычные символы и цифры, Enter — новая строка, Backspace — удаление
 -- (с поддержкой UTF-8, включая кириллицу, через библиотеку unicode).
+--
+-- Перерисовка ограничена по частоте (throttling): не чаще одного кадра
+-- в 0.05 секунды — при зажатой клавише видеокарта не перегружается.
 --
 -- Подсветка синтаксиса Lua (без полноценного парсера):
 --   ключевые слова (local, if, then, ...) — цветом C.title (голубой);
@@ -288,20 +292,59 @@ local function findFirst(query)
     return nil
 end
 
--- ===== Отрисовка =====
-local function draw()
+-- ===== Throttling перерисовки (защита видеокарты) =====
+-- Не чаще одного кадра в MIN_REDRAW_DT секунд; если пришло слишком много
+-- key_down/scroll подряд — кадр откладывается и рисуется по таймауту.
+local MIN_REDRAW_DT = 0.05
+local redrawPending = false
+local lastDrawAt = -1
+
+-- ===== Статус-бар (последняя строка H) =====
+local function drawStatusBar()
+    local bar
+    if searching then
+        bar = " Поиск: " .. searchQuery .. "_   (Enter — найти, Esc — отмена)"
+    elseif statusMsg and computer.uptime() < statusUntil then
+        bar = " " .. statusMsg
+    else
+        bar = string.format(" Стр: %d, Кол: %d | Файл: %s%s | Ctrl+S - Сохранить, Ctrl+Q - Выйти",
+            cy, cx + 1, dirty and "[*] " or "", fname)
+    end
+    bar = clip(bar, W)
+    local pad = W - ulen(bar)
+    if pad > 0 then bar = bar .. string.rep(" ", pad) end
+
+    gpu.setBackground(C.tab_active or 0x0055AA)
+    if statusErr and not searching and statusMsg and computer.uptime() < statusUntil then
+        gpu.setForeground(0xFFB0B0)
+    else
+        gpu.setForeground(C.white)
+    end
+    gpu.set(1, H, bar)   -- полную строку пишем одним set (без очистки — меньше мерцания)
+    gpu.setBackground(C.bg)
+    gpu.setForeground(C.fg)
+end
+
+-- ===== Кадр редактора =====
+-- Порядок отрисовки: очистка ТОЛЬКО текстовой области (1..H-1) → текст →
+-- подсветка поиска → курсор → в самом конце статус-бар (строка H не затирается).
+local function drawEditor()
     local viewH = H - 1
+    lastDrawAt = computer.uptime()
 
     -- Держим курсор в видимой области
     if cy < topLine then topLine = cy end
     if cy > topLine + viewH - 1 then topLine = cy - viewH + 1 end
     if topLine < 1 then topLine = 1 end
+    local maxTop = #lines - viewH + 1
+    if maxTop < 1 then maxTop = 1 end
+    if topLine > maxTop then topLine = maxTop end
     if cx < leftCol then leftCol = cx end
     if cx > leftCol + TEXT_W - 1 then leftCol = cx - TEXT_W + 1 end
     if leftCol < 0 then leftCol = 0 end
 
     gpu.setBackground(C.bg)
-    gpu.fill(1, 1, W, H, " ")
+    gpu.fill(1, 1, W, H - 1, " ")   -- очищаем только текстовую область (1..H-1)
 
     -- Номера строк и текст
     for row = 1, viewH do
@@ -335,7 +378,8 @@ local function draw()
         end
     end
 
-    -- Курсор — инверсией цвета (символ под курсором, либо пробел в конце строки)
+    -- Курсор — инверсией цвета (символ под курсором, либо пробел в конце строки).
+    -- Только в текстовой области: строка <= H-1.
     local row = cy - topLine + 1
     local col = TEXT_X + (cx - leftCol)
     if row >= 1 and row <= viewH and col >= TEXT_X and col <= W then
@@ -348,25 +392,40 @@ local function draw()
         gpu.setForeground(C.fg)
     end
 
-    -- Статус-бар (последняя строка)
-    gpu.setBackground(C.tab_active or 0x0055AA)
-    gpu.setForeground(C.white)
-    gpu.fill(1, H, W, 1, " ")
+    -- Статус-бар рисуется в самом конце
+    drawStatusBar()
+end
 
-    local bar
-    if searching then
-        bar = " Поиск: " .. searchQuery .. "_   (Enter — найти, Esc — отмена)"
-    elseif statusMsg and computer.uptime() < statusUntil then
-        bar = " " .. statusMsg
-        if statusErr then gpu.setForeground(0xFFB0B0) end
+-- Запрос перерисовки с ограничением частоты (throttling)
+local function requestDraw()
+    if computer.uptime() - lastDrawAt >= MIN_REDRAW_DT then
+        redrawPending = false
+        drawEditor()
     else
-        bar = string.format(" Стр: %d, Кол: %d | Файл: %s%s | Ctrl+S - Сохранить, Ctrl+Q - Выйти",
-            cy, cx + 1, dirty and "[*] " or "", fname)
+        redrawPending = true   -- кадр отложен до таймаута event.pull
     end
-    gpu.set(1, H, clip(bar, W))
+end
 
-    gpu.setBackground(C.bg)
-    gpu.setForeground(C.fg)
+-- ===== Прокрутка колесом мыши (scroll) =====
+-- Сигнатура события: scroll(screenAddress, x, y, direction, playerName),
+-- direction: 1 — вверх, -1 — вниз.
+local SCROLL_STEP = 3
+local function handleScroll(direction)
+    if direction ~= 1 and direction ~= -1 then return end
+    local viewH = H - 1
+    local maxTop = math.max(1, #lines - viewH + 1)
+
+    topLine = topLine - direction * SCROLL_STEP   -- 1 = вверх, -1 = вниз
+    if topLine < 1 then topLine = 1 end
+    if topLine > maxTop then topLine = maxTop end
+
+    -- Курсор остаётся в зоне видимости
+    if cy < topLine then cy = topLine end
+    if cy > topLine + viewH - 1 then cy = topLine + viewH - 1 end
+
+    clampCursor()
+    searchMatch = nil
+    requestDraw()
 end
 
 -- ===== Обработка клавиш =====
@@ -404,7 +463,7 @@ local function handleSearchKey(char, code)
     elseif char >= 32 and char ~= 127 then     -- обычный символ
         searchQuery = searchQuery .. uchar(char)
     end
-    draw()
+    requestDraw()
 end
 
 local function handleKey(char, code)
@@ -418,26 +477,26 @@ local function handleKey(char, code)
     if code == 33 and char < 32 then
         searching = true
         searchQuery = ""
-        draw()
+        requestDraw()
         return
     end
 
     -- Ctrl+S — сохранить (Ctrl даёт управляющий символ < 32)
     if code == 31 and char < 32 then
         saveFile()
-        draw()
+        requestDraw()
         return
     end
     -- Ctrl+Q — выйти
     if code == 16 and char < 32 then
         tryQuit()
-        if running then draw() end
+        if running then requestDraw() end
         return
     end
     -- Esc — попытка выхода
     if code == 1 then
         tryQuit()
-        if running then draw() end
+        if running then requestDraw() end
         return
     end
 
@@ -474,18 +533,26 @@ local function handleKey(char, code)
         insertChar(uchar(char))
     end
 
-    draw()
+    requestDraw()
 end
 
 -- ===== Запуск =====
 loadFile()
-draw()
+drawEditor()
 
 local okRun, errRun = pcall(function()
     while running do
-        local ev, _, p2, p3 = event.pull()
+        local ev, _, p2, p3, p4 = event.pull(0.05)
         if ev == "key_down" then
             handleKey(tonumber(p2) or 0, tonumber(p3) or 0)
+        elseif ev == "scroll" then
+            handleScroll(tonumber(p4) or 0)
+        elseif ev == nil then
+            -- Таймаут: если кадр был отложен throttling'ом — рисуем его сейчас
+            if redrawPending then
+                redrawPending = false
+                drawEditor()
+            end
         elseif ev == "interrupted" or ev == "component_removed" then
             break
         end
