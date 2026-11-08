@@ -36,7 +36,7 @@ local H = (okRes and tonumber(resH)) or 25
 
 local state = {
     items = {}, page = 1, totalPages = 1, selectedItem = nil, quantity = 1,
-    currentTab = "ME", player = nil, currentPlayer = nil, isAdmin = false, canModerate = false, adminList = {},
+    currentTab = "DASH", player = nil, currentPlayer = nil, isAdmin = false, canModerate = false, adminList = {},
     statusMsg = "", statusErr = false, statusLevel = "ok",
     notifications = {},
     networkInfo = {},
@@ -272,7 +272,13 @@ local function applyLogSearchFilter()
 end
 
 local function updateList()
-    if state.currentTab == "ME" then
+    if state.currentTab == "DASH" then
+        -- Дашборд: сводка по сети + список крафт-процессоров + журнал
+        state.items = {}
+        state.networkInfo = api.getNetworkInfo()
+        state.networkInfo.crafting = api.getCraftingInfo()
+        state.logs = db.getLogs()
+    elseif state.currentTab == "ME" then
         state.items = api.getNetworkItems()
     elseif state.currentTab == "INV" then
         if api.isPlayerPresent() then
@@ -396,6 +402,10 @@ local function switchTab(tabId)
     state.isSearching = false
     state.isLogSearching = false
     state.logClearArmed = false
+    -- При входе на «Главную» запрашиваем свежий журнал (последние записи)
+    if tabId == "DASH" then
+        state.logs = db.getLogs()
+    end
     updateList(); requestRedraw()
     return true
 end
@@ -568,12 +578,13 @@ while true do
         requestRedraw()
     end
     
-    -- Автообновление статистики и монитора раз в 2 секунды (не трогаем открытую карточку)
-    if state.selectedItem == nil and (state.currentTab == "STATS" or state.currentTab == "MON") and computer.uptime() - state.lastUpdate > 2 then
+    -- Автообновление статистики, дашборда и монитора раз в 2 секунды
+    -- (не трогаем открытую карточку предмета)
+    if state.selectedItem == nil and (state.currentTab == "STATS" or state.currentTab == "MON" or state.currentTab == "DASH") and computer.uptime() - state.lastUpdate > 2 then
         updateList()
 
-        -- Точка для графика энергии (только на вкладке «Статистика»)
-        if state.currentTab == "STATS" and state.networkInfo then
+        -- Точка для графика энергии (вкладки «Статистика» и «Главная»)
+        if (state.currentTab == "STATS" or state.currentTab == "DASH") and state.networkInfo then
             local eStored = tonumber(state.networkInfo.energyStored)
             local eMax = tonumber(state.networkInfo.energyMax)
             if eStored and eMax and eMax > 0 then
@@ -629,7 +640,7 @@ while true do
             elseif state.isAdmin then
                 notify("Вы вошли как администратор")
             end
-            state.currentTab = "ME"
+            state.currentTab = "DASH"
             updateList(); requestRedraw()
         end
         
@@ -644,7 +655,7 @@ while true do
         state.isTechAdmin = false
         state.banReasonText = ""
         state.isLogSearching = false
-        state.currentTab = "ME"
+        state.currentTab = "DASH"
         state.selectedItem = nil -- Закрываем открытую карточку при уходе игрока
         state.page = 1
         setStatus("Пользователь покинул PIM", "warn")
@@ -657,12 +668,12 @@ while true do
         -- Коды клавиш из /lib/core/full_keyboard.lua OpenOS:
         --   F1=59 (0x3B) … F6=64 (0x40), "/"=53 (0x35)
         local function keyToTab(code)
-            if code == 59 then return "ME" end      -- F1
-            if code == 60 then return "INV" end     -- F2
-            if code == 61 then return "STATS" end   -- F3
-            if code == 62 then return "MON" end     -- F4
-            if code == 63 then return "LOGS" end    -- F5
-            if code == 64 then return "ADMIN" end   -- F6
+            if code == 59 then return "DASH" end    -- F1
+            if code == 60 then return "ME" end      -- F2
+            if code == 61 then return "INV" end     -- F3
+            if code == 62 then return "STATS" end   -- F4
+            if code == 63 then return "CRAFT" end   -- F5
+            if code == 64 then return "MON" end     -- F6
             return nil
         end
 
@@ -882,6 +893,33 @@ while true do
             updateList(); requestRedraw()
             local names = { alpha = "А-Я", asc = "по возрастанию", desc = "по убыванию" }
             setStatus("Сортировка: " .. (names[state.sortMode] or state.sortMode))
+
+        elseif not state.selectedItem and state.currentTab == "DASH" then
+            -- Кнопки дашборда: МЭ-СЕТЬ / СДАТЬ ВСЁ / ОБНОВИТЬ
+            for _, b in ipairs(ui.getDashboardLayout(W, H)) do
+                if y == b.y and x >= b.x and x < b.x + b.w then
+                    if b.action == "net" then
+                        switchTab("ME")
+                    elseif b.action == "deposit" then
+                        if not api.isPlayerPresent() then
+                            setStatus("Нет активного пользователя (встаньте на PIM)", "err")
+                        elseif not api.canDeposit(state.player) then
+                            setStatus("Доступ запрещён: недостаточно прав", "err")
+                        else
+                            local moved, msg = api.depositAll()
+                            updateList(); requestRedraw()
+                            local isWarn = (moved == 0) or (msg and msg:find("ВНИМАНИЕ", 1, true) ~= nil)
+                            notify(msg, isWarn and "warn" or "ok")
+                        end
+                    elseif b.action == "refresh" then
+                        state.lastUpdate = 0
+                        state.energyHistory = {}
+                        updateList(); requestRedraw()
+                        setStatus("Данные обновлены")
+                    end
+                    break
+                end
+            end
 
         elseif not state.selectedItem and y == H - 2 then
             -- Нижняя панель: работает на всех вкладках (раскладка общая с ui)

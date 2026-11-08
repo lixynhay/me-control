@@ -44,6 +44,7 @@ end
 
 function ui.getTabs(canModerate, isAdmin)
     local tabs = {
+        { id = "DASH",  label = " Главная " },
         { id = "ME",    label = " МЭ-сеть " },
         { id = "INV",   label = " Инвентарь " },
         { id = "STATS", label = " Статистика " },
@@ -214,7 +215,10 @@ function ui.drawMain(W, H, state)
         ui.drawButton(bottom.exit.x, H - 2, bottom.exit.w, "ВЫХОД", false)
     end
     
-    if state.currentTab == "LOGS" then
+    if state.currentTab == "DASH" then
+        ui.drawDashboard(W, H, state)
+        return
+    elseif state.currentTab == "LOGS" then
         if state.isLogSearching or (state.logSearchQuery and state.logSearchQuery ~= "") then
             gpu.setForeground(C.title)
             local s = "Поиск по журналу: " .. tostring(state.logSearchQuery or "") .. "_"
@@ -860,6 +864,11 @@ local function percentOf(used, total)
     return pct
 end
 
+-- Внутренняя ширина текстовой полосы прогресса (без учёта скобок "[" "]")
+local ENERGY_BAR_WIDTH = 20
+-- Энергетическая полоса и график под ней начинаются в этой колонке
+local ENERGY_BAR_X = 5
+
 -- Текстовая полоса прогресса шириной width
 local function progressBar(pct, width)
     local filled = math.floor(pct / 100 * width + 0.5)
@@ -983,18 +992,20 @@ function ui.drawStats(W, H, info, storage, history)
             math.floor(info.energyStored), math.floor(info.energyMax), pct))
         y = y + 1
 
-        -- Полоса заполнения [████░░░░] — остаётся на своей строке (barY)
+        -- Полоса заполнения [████░░░░] — цельная, ровно ENERGY_BAR_WIDTH символов внутри.
+        -- График рисуется СТРОГО на следующей строке (barY + 1), а не внутри полосы.
         local barY = y
         gpu.setForeground(pct >= 20 and C.ok or C.danger)
-        gpu.set(5, barY, progressBar(pct, 20))
+        gpu.set(ENERGY_BAR_X, barY, progressBar(pct, ENERGY_BAR_WIDTH))
         y = y + 1
 
-        -- График истории (▁▂▃▄▅▆▇█) — строго ПОД полосой (barY + 1),
-        -- ровно по ширине полосы, чтобы не залезать на другие строки.
+        -- График истории (▁▂▃▄▅▆▇█) — строго ПОД полосой. Если истории нет,
+        -- drawEnergyGraph только очищает строку и ничего не рисует.
         local graphY = barY + 1
         if graphY <= lastRow then
             gpu.setForeground(C.ok)
-            drawEnergyGraph(5, graphY, 22, history)
+            local usedBarWidth = ENERGY_BAR_WIDTH + 2   -- полоса + скобки "[ ]"
+            drawEnergyGraph(ENERGY_BAR_X, graphY, usedBarWidth, history)
             y = graphY + 1
         end
     end
@@ -1104,6 +1115,186 @@ function ui.drawStats(W, H, info, storage, history)
     gpu.setForeground(C.title)
     gpu.fill(3, H - 4, W - 4, 1, " ")
     gpu.set(5, H - 4, upText)
+    gpu.setForeground(C.fg)
+end
+
+-- ===== Вкладка «Главная» (дашборд) =====
+-- Русские подписи действий в журнале -> человекочитаемый текст
+local ACTION_LABEL = {
+    take = "взял",
+    put  = "сдал",
+}
+
+-- Действие -> глагол в 3-м лице для строки событий
+local ACTION_VERB = {
+    take = "получил",
+    put  = "сдал",
+}
+
+-- Раскладка кнопок дашборда (общая для отрисовки и обработки кликов)
+function ui.getDashboardLayout(W, H)
+    local bw, gap = 17, 2
+    local total = bw * 3 + gap * 2
+    local x = math.floor((W - total) / 2) + 1
+    if x < 2 then x = 2 end
+    local function mk(off, action, text)
+        return { x = x + off, y = H - 3, w = bw, action = action, text = text }
+    end
+    return {
+        mk(0,              "net",     "МЭ-СЕТЬ"),
+        mk(bw + gap,       "deposit", "СДАТЬ ВСЁ"),
+        mk((bw + gap) * 2, "refresh", "ОБНОВИТЬ"),
+    }
+end
+
+-- Отрисовка дашборда. state — общий state из main.lua:
+--   networkInfo (totalItems/totalTypes/энергия), crafting (busy/total), logs.
+function ui.drawDashboard(W, H, state)
+    state = state or {}
+    local info = state.networkInfo or {}
+    local crafting = info.crafting or {}
+    local history = state.energyHistory
+
+    -- Верхняя рамка-панель (не мешает глобальным вкладкам и статусу внизу)
+    ui.drawFrame(2, 4, W - 3, H - 8, C.border)
+    gpu.setBackground(C.bg)
+    gpu.fill(3, 5, W - 5, H - 10, " ")
+
+    gpu.setForeground(C.title)
+    local title = "--- Главная ---"
+    gpu.set(math.floor((W - unicode.len(title)) / 2) + 1, 4, title)
+
+    local lastRow = H - 5
+    local colGap = 4
+    local leftX = 4
+    local leftW = math.floor((W - 5 - colGap) / 2) - 1
+    if leftW < 20 then leftW = 20 end
+    local rightX = leftX + leftW + colGap
+    local rightW = (W - 3) - rightX - 1
+    if rightW < 18 then rightW = 18 end
+
+    -- ===== Левая колонка: сводка =====
+    local y = 5
+    gpu.setForeground(C.title)
+    gpu.set(leftX, y, "Сводка")
+    y = y + 1
+
+    gpu.setForeground(C.white)
+    gpu.set(leftX, y, "Предметов:")
+    gpu.setForeground(C.ok)
+    gpu.set(leftX + 18, y, tostring(info.totalItems or 0))
+    y = y + 1
+
+    gpu.setForeground(C.white)
+    gpu.set(leftX, y, "Типов:")
+    gpu.setForeground(C.ok)
+    gpu.set(leftX + 18, y, tostring(info.totalTypes or 0))
+    y = y + 1
+
+    gpu.setForeground(C.white)
+    gpu.set(leftX, y, "Крафт-процессоры:")
+    y = y + 1
+    local busy = tonumber(crafting.busyCpus) or 0
+    local total = tonumber(crafting.totalCpus) or 0
+    gpu.setForeground(busy > 0 and C.admin or C.ok)
+    gpu.set(leftX + 2, y, tostring(busy) .. " / " .. tostring(total))
+
+    -- ===== Правая колонка: энергия =====
+    y = 5
+    gpu.setForeground(C.title)
+    gpu.set(rightX, y, "Энергия")
+    y = y + 1
+
+    local eStored = tonumber(info.energyStored)
+    local eMax = tonumber(info.energyMax)
+    if eStored and eMax and eMax > 0 then
+        local pct = percentOf(eStored, eMax)
+        gpu.setForeground(C.white)
+        gpu.set(rightX, y, string.format("%d / %d AE (%d%%)",
+            math.floor(eStored), math.floor(eMax), pct))
+        y = y + 1
+
+        -- Полоса заполнения — цельная, ENERGY_BAR_WIDTH символов внутри
+        gpu.setForeground(pct >= 20 and C.ok or C.danger)
+        gpu.set(rightX, y, progressBar(pct, ENERGY_BAR_WIDTH))
+        local barY = y
+        y = y + 1
+
+        -- График строго под полосой; при пустой истории только очистка строки
+        gpu.setForeground(C.ok)
+        drawEnergyGraph(rightX, barY + 1, ENERGY_BAR_WIDTH + 2, history)
+        y = barY + 2
+    else
+        gpu.setForeground(C.muted)
+        gpu.set(rightX, y, "нет данных о энергии")
+        y = y + 2
+    end
+
+    -- Приход / расход
+    local injection = tonumber(info.avgPowerInjection)
+    local usage = tonumber(info.avgPowerUsage)
+    if injection ~= nil or usage ~= nil then
+        injection = injection or 0
+        usage = usage or 0
+        local deficit = usage > injection
+        if y <= lastRow then
+            gpu.setForeground(C.ok)
+            gpu.set(rightX, y, string.format("+%.0f AE/t", injection))
+            gpu.setForeground(C.danger)
+            gpu.set(rightX + 14, y, string.format("-%.0f AE/t", usage))
+            y = y + 1
+        end
+        if deficit and y <= lastRow then
+            gpu.setForeground(C.danger)
+            gpu.set(rightX, y, "[!] Дефицит")
+        end
+    end
+
+    -- ===== Центр-низ: последние события =====
+    local evY = lastRow - 4
+    if evY < 12 then evY = 12 end
+    if evY > lastRow then evY = lastRow end
+
+    gpu.setForeground(C.title)
+    gpu.set(leftX, evY, "Последние события")
+    evY = evY + 1
+
+    local logs = state.logs or {}
+    local shown = 0
+    for i = 1, #logs do
+        if shown >= 4 then break end
+        local e = logs[i]
+        local verb = ACTION_VERB[e.action] or ACTION_LABEL[e.action] or tostring(e.action or "?")
+        local when
+        local t = tonumber(e.time)
+        if e.timeText then
+            when = tostring(e.timeText)
+        elseif t and t > 0 then
+            local okD, d = pcall(os.date, "%H:%M", t)
+            when = okD and d or "--:--"
+        else
+            when = "--:--"
+        end
+        local line = string.format("[%s] %s: %s", when, tostring(e.player or "?"), verb)
+        if unicode.len(line) > W - 8 then line = unicode.sub(line, 1, W - 11) .. "..." end
+        gpu.setForeground(C.fg)
+        gpu.set(leftX, evY, line)
+        evY = evY + 1
+        shown = shown + 1
+    end
+    if shown == 0 then
+        gpu.setForeground(C.muted)
+        gpu.set(leftX, evY, "Событий пока нет")
+    end
+
+    -- ===== Кнопки внизу =====
+    for _, b in ipairs(ui.getDashboardLayout(W, H)) do
+        local bg = C.btn
+        if b.action == "deposit" then bg = C.warning end
+        if b.action == "refresh" then bg = C.ok end
+        ui.drawButton(b.x, b.y, b.w, b.text, false, bg)
+    end
+
     gpu.setForeground(C.fg)
 end
 
