@@ -10,6 +10,7 @@
 
 local component = require("component")
 local computer = require("computer")
+local filesystem = require("filesystem")
 local shell = require("shell")
 local gpu = component.gpu
 local config = require("config")
@@ -17,6 +18,7 @@ local ui = require("ui")
 local updater = require("updater")
 
 local VERSION_FILE = "/home/version.txt"
+local SHRC_FILE = "/home/.shrc"
 
 -- ===== Экран =====
 pcall(function() gpu.setResolution(gpu.maxResolution()) end)
@@ -51,8 +53,64 @@ local function readLocalVersion()
     return v
 end
 
--- Запуск панели: shell.execute + выход
+-- Активация автозапуска boot.lua в /home/.shrc.
+-- Нужно, чтобы при первом же запуске загрузчик прописал себя на будущие перезагрузки.
+--   * .shrc нет            -> создаём с содержимым "boot.lua";
+--   * есть "main.lua"      -> заменяем на "boot.lua";
+--   * нет "boot.lua"       -> дописываем в конец.
+local function ensureShrc()
+    local exists = filesystem.exists(SHRC_FILE)
+    local text
+    if exists then
+        local f = io.open(SHRC_FILE, "r")
+        if f then
+            text = f:read("*a") or ""
+            f:close()
+        end
+    end
+
+    if not exists then
+        local w = io.open(SHRC_FILE, "w")
+        if w then
+            w:write("boot.lua\n")
+            w:close()
+            log(".shrc создан: boot.lua")
+        else
+            log("Не удалось создать .shrc")
+        end
+        return
+    end
+
+    if text == nil then
+        log("Не удалось прочитать .shrc")
+        return
+    end
+
+    if text:find("main.lua", 1, true) then
+        local updated = text:gsub("main%.lua", "boot.lua")
+        local w = io.open(SHRC_FILE, "w")
+        if w then
+            w:write(updated)
+            w:close()
+            log(".shrc обновлён: main.lua -> boot.lua")
+        end
+        return
+    end
+
+    if not text:find("boot.lua", 1, true) then
+        local w = io.open(SHRC_FILE, "a")
+        if w then
+            if text ~= "" and text:sub(-1) ~= "\n" then w:write("\n") end
+            w:write("boot.lua\n")
+            w:close()
+            log(".shrc дополнен: boot.lua")
+        end
+    end
+end
+
+-- Запуск панели: активируем автозапуск, затем shell.execute + выход
 local function launch()
+    ensureShrc()
     render("Запуск панели...", nil)
     pcall(shell.execute, "main.lua")
     os.exit()
@@ -108,6 +166,7 @@ end)
 
 if ok then
     -- 7d. Успех
+    ensureShrc() -- активируем boot.lua до перезагрузки
     render("Обновление завершено! Перезагрузка...", 100)
     os.sleep(1)
     computer.shutdown(true)
