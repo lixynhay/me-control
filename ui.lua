@@ -841,17 +841,19 @@ local function graphSymbol(pct)
 end
 
 -- Рисует однострочный график энергии: один символ на замер истории.
+-- Рисуется ПОСТРОЧНО через gpu.set, чтобы гарантированно не задевать
+-- соседние строки (полосу заполнения сверху и «Приход/Расход» снизу).
 local function drawEnergyGraph(x, y, width, history)
+    -- Очищаем ровно строку графика
     gpu.set(x, y, string.rep(" ", width))
     if not history or #history == 0 then return end
 
     local n = math.min(#history, width)
     local startIdx = #history - n + 1
-    local chars = {}
     for col = 1, n do
-        chars[col] = graphSymbol(history[startIdx + col - 1])
+        local sym = graphSymbol(history[startIdx + col - 1])
+        gpu.set(x + col - 1, y, sym)
     end
-    gpu.set(x, y, table.concat(chars))
 end
 
 -- Секунды -> ЧЧ:ММ:СС
@@ -903,15 +905,19 @@ function ui.drawStats(W, H, info, storage, history)
             math.floor(info.energyStored), math.floor(info.energyMax), pct))
         y = y + 1
 
+        -- Полоса заполнения [████░░░░] — остаётся на своей строке (barY)
+        local barY = y
         gpu.setForeground(pct >= 20 and C.ok or C.danger)
-        gpu.set(5, y, progressBar(pct, 20))
+        gpu.set(5, barY, progressBar(pct, 20))
         y = y + 1
 
-        -- График энергии: одна строка, цвет C.ok
-        if y <= lastRow then
+        -- График истории (▁▂▃▄▅▆▇█) — строго ПОД полосой (barY + 1),
+        -- ровно по ширине полосы, чтобы не залезать на другие строки.
+        local graphY = barY + 1
+        if graphY <= lastRow then
             gpu.setForeground(C.ok)
-            drawEnergyGraph(5, y, 20, history)
-            y = y + 1
+            drawEnergyGraph(5, graphY, 22, history)
+            y = graphY + 1
         end
     end
 
@@ -1114,13 +1120,13 @@ function ui.drawModal(W, H, item, qty, mode, canAction, isAdmin)
     end
     gpu.set(mx + 2, my + 5, sourceLabel)
     gpu.setForeground(C.ok)
-    gpu.set(mx + sourceX, my + 5, tostring(item.size or 0) .. " шт.")
+    gpu.set(mx + sourceX, my + 5, math.floor(tonumber(item.size) or 0) .. " шт.")
     
     gpu.setForeground(C.white); gpu.set(mx + 2, my + 7, "Количество:")
     ui.drawButton(mx + 2, my + 9, 6, "-10", false)
     ui.drawButton(mx + 9, my + 9, 6, "-1", false)
     gpu.setForeground(C.ok)
-    local q = tostring(qty) .. " шт."
+    local q = math.floor(tonumber(qty) or 0) .. " шт."
     gpu.set(mx + 17, my + 9, string.rep(" ", math.max(0, 10 - unicode.len(q))) .. q)
     ui.drawButton(mx + 29, my + 9, 6, "+1", false)
     ui.drawButton(mx + 36, my + 9, 6, "+10", false)

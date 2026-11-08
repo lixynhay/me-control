@@ -197,7 +197,7 @@ local function runAutoCraft()
                         state.lastAutoCrafts[item.name] = now
                         sent = true
                         local name = tostring(craftable.display or craftable.label or item.label or item.name)
-                        notify("Автокрафт: запущен " .. name .. " x" .. tostring(amount), "info")
+                        notify("Автокрафт: запущен " .. name .. " x" .. math.floor(amount), "info")
                     else
                         -- CPU занят / нет ресурсов: молча ждём следующей итерации,
                         -- каунтдаун НЕ ставим, чтобы попробовать снова через 10 секунд.
@@ -987,8 +987,8 @@ while true do
                     if ok then
                         state.lastCraftStatus = status
                         state.lastCraftCheck = 0
-                        setStatus("Запрос на крафт отправлен: " .. tostring(state.selectedItem.display or state.selectedItem.label)
-                            .. " x" .. tostring(state.quantity))
+                        notify("Запрос на крафт отправлен: " .. tostring(state.selectedItem.display or state.selectedItem.label)
+                            .. " x" .. math.floor(state.quantity))
                     else
                         state.lastCraftStatus = nil
                         notify("Не удалось запросить крафт: " .. tostring(res), "err")

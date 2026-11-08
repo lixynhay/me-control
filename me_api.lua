@@ -469,7 +469,7 @@ function api.exportToPlayer(item, amount)
     if denied then return false, denied end
 
     local me = component.me_interface
-    local realAmount = math.min(amount, item.size)
+    local realAmount = math.floor(math.min(tonumber(amount) or 0, tonumber(item.size) or 0))
     if realAmount <= 0 then return false, "В МЭ-сети нет этого предмета" end
     
     local itemDamage = item.damage or 0
@@ -492,6 +492,7 @@ function api.exportToPlayer(item, amount)
     if actuallyExported < 0 then actuallyExported = 0 end
     
     if actuallyExported > 0 then
+        actuallyExported = math.floor(actuallyExported)
         db.addLog(getPimPlayer(), "take", item.display or item.label, actuallyExported)
         return true, "Выдано: " .. actuallyExported .. " шт."
     end
@@ -504,6 +505,9 @@ function api.pushFromPlayer(item, amount)
     local playerName = getPimPlayer()
     local denied = checkPermission(playerName, "canDeposit", "сдавать предметы")
     if denied then return false, denied end
+
+    amount = math.floor(tonumber(amount) or 0)
+    if amount < 1 then amount = 1 end
 
     local pim = component.pim
     local me = component.me_interface
@@ -568,9 +572,9 @@ function api.pushFromPlayer(item, amount)
 
     db.addLog(getPimPlayer(), "put", (type(item) == "table" and item.display) or itemLabel, moved)
     if moved >= amount then
-        return true, "Сдано: " .. moved .. " шт."
+        return true, "Сдано: " .. math.floor(moved) .. " шт."
     end
-    return false, "МЭ-сеть приняла только " .. moved .. " из " .. amount .. " шт.; остальное осталось в инвентаре"
+    return false, "МЭ-сеть приняла только " .. math.floor(moved) .. " из " .. math.floor(amount) .. " шт.; остальное осталось в инвентаре"
 end
 
 -- Проверка наличия игрока
@@ -918,7 +922,7 @@ function api.depositAll()
             if stackCount > 0 then
                 local pOk, pushed = pcall(function() return pim.pushItem(config.side_push, slot, stackCount) end)
                 if pOk and tonumber(pushed) and tonumber(pushed) > 0 then
-                    local n = tonumber(pushed)
+                    local n = math.floor(tonumber(pushed))
                     moved = moved + n
                     local rawLbl = stripColor(stack.display_name or stack.label or stack.name or "Неизвестный предмет")
                     local lbl = locale.getName(stack.id or stack.name, tonumber(stack.damage) or tonumber(stack.dmg) or 0, rawLbl)
@@ -943,7 +947,7 @@ function api.depositAll()
     if totalBefore ~= nil and totalAfter ~= nil and (totalAfter - totalBefore) < moved then
         return moved, "Некоторые предметы не попали в МЭ-сеть — заберите их из ME Interface вручную"
     end
-    return moved, "Сдано всё: " .. moved .. " шт."
+    return moved, "Сдано всё: " .. math.floor(moved) .. " шт."
 end
 
 -- Проверка: есть ли хотя бы один предмет со статусом «МАЛО»

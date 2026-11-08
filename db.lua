@@ -346,7 +346,7 @@ function db.addLog(player, action, item, amount)
         player = player or "Unknown",
         action = action, -- "take" (взял) или "put" (сдал)
         item = item or "Unknown",
-        amount = amount or 0
+        amount = math.floor(tonumber(amount) or 0)
     }
     
     table.insert(data.logs, 1, entry) -- свежие сверху
