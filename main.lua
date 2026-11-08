@@ -238,7 +238,7 @@ local function applySearchFilter()
 
     state.items = api.sortItems(list, state.sortMode)
 
-    state.totalPages = math.max(1, math.ceil(#state.items / (H - 10)))
+    state.totalPages = math.max(1, math.ceil(#state.items / math.max(1, H - 10)))
     if state.page > state.totalPages then state.page = state.totalPages end
 end
 
@@ -303,7 +303,7 @@ local function updateList()
     elseif state.currentTab == "CRAFT" then
         state.items = {}
         state.craftables = api.getCraftables()
-        state.totalPages = math.max(1, math.ceil(#state.craftables / (H - 10)))
+        state.totalPages = math.max(1, math.ceil(#state.craftables / math.max(1, H - 10)))
         if state.craftPage > state.totalPages then state.craftPage = state.totalPages end
         if state.craftPage < 1 then state.craftPage = 1 end
 
@@ -336,7 +336,7 @@ local function updateList()
     end
     
     if state.currentTab ~= "ADMIN" and state.currentTab ~= "CRAFT" then
-        state.totalPages = math.max(1, math.ceil(#state.items / (H - 10)))
+        state.totalPages = math.max(1, math.ceil(#state.items / math.max(1, H - 10)))
         if state.page > state.totalPages then state.page = state.totalPages end
     end
 end
@@ -544,7 +544,7 @@ while true do
             local okT, now = pcall(os.time)
             now = okT and tonumber(now) or nil
             if now and now >= state.banInfo.expires then
-                db.unbanPlayer(state.player)
+                db.unbanPlayer(nil, state.player)
                 state.isBanned = false
                 state.banInfo = nil
                 setStatus("Срок бана истёк, доступ восстановлен")
@@ -1071,7 +1071,7 @@ while true do
                     updateList(); requestRedraw()
 
                 elseif inRect(L.unban) then
-                    local okU, uErr = db.unbanPlayer(state.adminTarget)
+                    local okU, uErr = db.unbanPlayer(state.player, state.adminTarget)
                     if okU then
                         notify("Игрок " .. state.adminTarget .. " разбанен")
                     else
@@ -1099,7 +1099,7 @@ while true do
             local mx, my = math.floor((W - mw) / 2) + 1, math.floor((H - mh) / 2) + 1
             local isCraft = (state.currentTab == "CRAFT")
             -- Для крафта «максимум» не ограничен количеством в сети
-            local maxQty = isCraft and 1000000 or (tonumber(state.selectedItem.size) or 0)
+            local maxQty = isCraft and 1000000 or math.floor(tonumber(state.selectedItem.size) or 0)
 
             -- Кнопки количества
             if y == my + 9 then
@@ -1146,7 +1146,7 @@ while true do
                         end
                         notify(msg, ok and "ok" or "err")
                     end
-                    os.sleep(1.5); state.selectedItem = nil; updateList(); requestRedraw()
+                    state.selectedItem = nil; updateList(); requestRedraw()
                 end
             end
             
@@ -1167,7 +1167,7 @@ while true do
                 elseif curMin == 10000 then newMin = 100000
                 else newMin = 0 end
                 
-                db.setThreshold(state.selectedItem.name, state.selectedItem.label, newMin)
+                db.setThreshold(state.player, state.selectedItem.name, state.selectedItem.label, newMin)
                 requestRedraw()
             end
             

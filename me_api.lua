@@ -482,7 +482,7 @@ function api.exportToPlayer(item, amount)
     if not ok then return false, "Ошибка API: " .. tostring(result) end
     
     -- Даём МЭ обновить данные и считаем фактическую выдачу
-    os.sleep(0.2)
+    os.sleep(0.05)
     local countAfter = getNetworkCountByStack(item.name, itemDamage)
     
     local actuallyExported = 0
@@ -553,7 +553,7 @@ function api.pushFromPlayer(item, amount)
     end
 
     -- Даём МЭ время обработать и сверяем количество
-    os.sleep(0.5)
+    os.sleep(0.1)
     local countAfter = getNetworkCount(itemName, itemLabel)
     if countBefore ~= nil and countAfter ~= nil then
         local accepted = math.floor(countAfter - countBefore)

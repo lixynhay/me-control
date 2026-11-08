@@ -76,30 +76,40 @@ end
 
 -- Загрузка базы данных из файла
 function db.load()
-    if filesystem.exists(DB_PATH) then
-        local file = io.open(DB_PATH, "r")
-        if file then
-            local content = file:read("*a")
-            file:close()
-            local ok, loaded = pcall(serialization.unserialize, content)
-            if ok and type(loaded) == "table" then
-                data = loaded
-                data.players = data.players or {}
-                data.config = data.config or { allowUserWithdraw = true, allowUserDeposit = true }
-                data.thresholds = data.thresholds or {}
-                data.logs = data.logs or {}
-                for _, p in pairs(data.players) do
-                    if p.banReason == nil then p.banReason = "" end
-                    if p.banExpires == nil then p.banExpires = 0 end
-                    -- Миграция: персональные права (появились в v1.7.0)
-                    if p.canWithdraw == nil then p.canWithdraw = true end
-                    if p.canDeposit == nil then p.canDeposit = true end
-                    if p.canCraft == nil then p.canCraft = true end
-                    -- Миграция: статистика профиля (v1.7.1)
-                    if p.totalActions == nil then p.totalActions = 0 end
-                    if p.lastSeen == nil then p.lastSeen = 0 end
-                end
-            end
+    -- Читаем основной файл; если его нет, пробуем недописанный *.tmp
+    -- (после аварии он может быть единственным валидным источником).
+    local function readFrom(path)
+        if not filesystem.exists(path) then return nil end
+        local file = io.open(path, "r")
+        if not file then return nil end
+        local content = file:read("*a")
+        file:close()
+        local ok, loaded = pcall(serialization.unserialize, content)
+        if ok and type(loaded) == "table" then return loaded end
+        return nil
+    end
+
+    local loaded = readFrom(DB_PATH)
+    if not loaded then
+        loaded = readFrom(DB_PATH .. ".tmp")
+    end
+
+    if loaded then
+        data = loaded
+        data.players = data.players or {}
+        data.config = data.config or { allowUserWithdraw = true, allowUserDeposit = true }
+        data.thresholds = data.thresholds or {}
+        data.logs = data.logs or {}
+        for _, p in pairs(data.players) do
+            if p.banReason == nil then p.banReason = "" end
+            if p.banExpires == nil then p.banExpires = 0 end
+            -- Миграция: персональные права (появились в v1.7.0)
+            if p.canWithdraw == nil then p.canWithdraw = true end
+            if p.canDeposit == nil then p.canDeposit = true end
+            if p.canCraft == nil then p.canCraft = true end
+            -- Миграция: статистика профиля (v1.7.1)
+            if p.totalActions == nil then p.totalActions = 0 end
+            if p.lastSeen == nil then p.lastSeen = 0 end
         end
     end
     
@@ -139,16 +149,30 @@ function db.load()
     db.save()
 end
 
--- Сохранение базы данных в файл
+-- Сохранение базы данных в файл (атомарно: *.tmp -> rename)
+-- Записываем во временный файл, затем атомарно заменяем основной. Так обрыв
+-- питания/ошибка ФС в момент записи не оставит повреждённый database.dat.
 function db.save()
-    if data then
-        local content = serialization.serialize(data)
-        local file = io.open(DB_PATH, "w")
-        if file then
-            file:write(content)
-            file:close()
-        end
+    if not data then return false end
+    local content = serialization.serialize(data)
+    local tmpPath = DB_PATH .. ".tmp"
+    local file = io.open(tmpPath, "w")
+    if not file then
+        return false, "Ошибка сохранения БД"
     end
+    local ok, err = pcall(function() file:write(content) end)
+    file:close()
+    if not ok then
+        filesystem.remove(tmpPath)
+        return false, "Ошибка сохранения БД"
+    end
+    if filesystem.exists(DB_PATH) then filesystem.remove(DB_PATH) end
+    local renamed, renameErr = filesystem.rename(tmpPath, DB_PATH)
+    if not renamed then
+        filesystem.remove(tmpPath)
+        return false, "Ошибка сохранения БД"
+    end
+    return true
 end
 
 -- Получить данные игрока
@@ -320,8 +344,16 @@ function db.getThresholds()
     return data.thresholds
 end
 
--- Установить лимит предмета: itemName -> {label, min}; minAmount == 0 удаляет лимит
-function db.setThreshold(itemName, itemLabel, minAmount)
+-- Установить лимит предмета: itemName -> {label, min}; minAmount == 0 удаляет лимит.
+-- actorName == nil — системный вызов (автокрафт), проверка прав пропускается.
+function db.setThreshold(actorName, itemName, itemLabel, minAmount)
+    if actorName ~= nil then
+        local actor = db.getPlayer(actorName)
+        local level = actor and (db.ROLE_LEVELS[actor.role] or 0) or 0
+        if level < db.ROLE_LEVELS["admin"] then
+            return false, "Недостаточно прав"
+        end
+    end
     if not data then return false end
     if not data.thresholds then data.thresholds = {} end
     if not itemName or itemName == "" then return false end
@@ -423,9 +455,13 @@ function db.banPlayer(actorName, targetName, reason, durationMinutes)
     return true
 end
 
--- Разбанить игрока
-function db.unbanPlayer(name)
+-- Разбанить игрока. actorName == nil — системный вызов (например, авто-снятие бана).
+function db.unbanPlayer(actorName, name)
     if not data or not data.players[name] then return false end
+    if actorName ~= nil then
+        local ok, err = db.hasPermission(actorName, name, "unban")
+        if not ok then return false, err end
+    end
     data.players[name].role = "user"
     data.players[name].banReason = ""
     data.players[name].banExpires = 0
