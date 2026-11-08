@@ -487,7 +487,7 @@ function api.exportToPlayer(item, amount)
     
     local actuallyExported = 0
     if countBefore ~= nil and countAfter ~= nil then
-        actuallyExported = countBefore - countAfter
+        actuallyExported = math.floor(countBefore - countAfter)
     end
     if actuallyExported < 0 then actuallyExported = 0 end
     
@@ -536,10 +536,12 @@ function api.pushFromPlayer(item, amount)
             local stackLabel = stripColor(stack.display_name or stack.label or stack.name)
             local stackCount = stack.qty or stack.size or 0
             if stackLabel == itemLabel and stackCount > 0 then
-                local want = math.min(amount - moved, stackCount)
+                local want = math.floor(math.min(amount - moved, stackCount))
                 if want > 0 then
                     local pOk, pushed = pcall(function() return pim.pushItem(config.side_push, slot, want) end)
-                    if pOk and tonumber(pushed) then moved = moved + tonumber(pushed) end
+                    -- pushItem возвращает число (возможно, дробное) — сразу floor,
+                    -- чтобы «Сдано: N шт.» и журнал всегда показывали целое (1, а не 1.0)
+                    if pOk and tonumber(pushed) then moved = moved + math.floor(tonumber(pushed)) end
                     if moved >= amount then break end
                 end
             end
@@ -554,7 +556,7 @@ function api.pushFromPlayer(item, amount)
     os.sleep(0.5)
     local countAfter = getNetworkCount(itemName, itemLabel)
     if countBefore ~= nil and countAfter ~= nil then
-        local accepted = countAfter - countBefore
+        local accepted = math.floor(countAfter - countBefore)
         if accepted < 0 then accepted = 0 end
         local lost = moved - accepted
         if lost > 0 then
@@ -944,7 +946,7 @@ function api.depositAll()
     -- Проверка: всё ли реально попало в МЭ
     os.sleep(0.5)
     local totalAfter = getTotalNetworkCount()
-    if totalBefore ~= nil and totalAfter ~= nil and (totalAfter - totalBefore) < moved then
+    if totalBefore ~= nil and totalAfter ~= nil and math.floor(totalAfter - totalBefore) < moved then
         return moved, "Некоторые предметы не попали в МЭ-сеть — заберите их из ME Interface вручную"
     end
     return moved, "Сдано всё: " .. math.floor(moved) .. " шт."

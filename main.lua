@@ -921,8 +921,9 @@ while true do
                 end
             end
 
-        elseif not state.selectedItem and y == H - 2 then
-            -- Нижняя панель: работает на всех вкладках (раскладка общая с ui)
+        elseif not state.selectedItem and y == H - 2 and state.currentTab ~= "DASH" then
+            -- Нижняя панель: работает на всех вкладках (раскладка общая с ui).
+            -- На «Главной» (DASH) этих кнопок нет — обработку пропускаем.
             local bottom = ui.getBottomLayout(W)
             if x >= bottom.prev.x and x < bottom.prev.x + bottom.prev.w then
                 if state.currentTab == "LOGS" then

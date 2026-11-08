@@ -200,11 +200,15 @@ function ui.drawMain(W, H, state)
     
     ui.drawTabs(W, state.currentTab, state.canModerate, state.isAdmin)
     
-    -- Нижняя панель кнопок рисуется для всех вкладок (до ветвлений с return)
+    -- Нижняя панель кнопок рисуется для всех вкладок (до ветвлений с return).
+    -- На «Главной» (DASH) своя панель кнопок рисуется в ui.drawDashboard —
+    -- стандартные <<, >> и [ ОБНОВИТЬ ] здесь не дублируем.
     local bottom = ui.getBottomLayout(W)
-    ui.drawButton(bottom.prev.x, H - 2, bottom.prev.w, "<<", false)
-    ui.drawButton(bottom.refresh.x, H - 2, bottom.refresh.w, "ОБНОВИТЬ", false)
-    ui.drawButton(bottom.next.x, H - 2, bottom.next.w, ">>", false)
+    if state.currentTab ~= "DASH" then
+        ui.drawButton(bottom.prev.x, H - 2, bottom.prev.w, "<<", false)
+        ui.drawButton(bottom.refresh.x, H - 2, bottom.refresh.w, "ОБНОВИТЬ", false)
+        ui.drawButton(bottom.next.x, H - 2, bottom.next.w, ">>", false)
+    end
     if bottom.search and (state.currentTab == "ME" or state.currentTab == "INV" or state.currentTab == "LOGS") then
         ui.drawButton(bottom.search.x, H - 2, bottom.search.w, "ПОИСК", false, C.ok)
     end
@@ -930,9 +934,8 @@ end
 -- Рисует однострочный график энергии: один символ на замер истории.
 -- Рисуется ПОСТРОЧНО через gpu.set, чтобы гарантированно не задевать
 -- соседние строки (полосу заполнения сверху и «Приход/Расход» снизу).
+-- При пустой истории НЕ рисует ничего (в т.ч. не выводит пустые символы).
 local function drawEnergyGraph(x, y, width, history)
-    -- Очищаем ровно строку графика
-    gpu.set(x, y, string.rep(" ", width))
     if not history or #history == 0 then return end
 
     local n = math.min(#history, width)
@@ -1220,7 +1223,7 @@ function ui.drawDashboard(W, H, state)
         local barY = y
         y = y + 1
 
-        -- График строго под полосой; при пустой истории только очистка строки
+        -- График строго под полосой; при пустой истории не рисуется вовсе
         gpu.setForeground(C.ok)
         drawEnergyGraph(rightX, barY + 1, ENERGY_BAR_WIDTH + 2, history)
         y = barY + 2
@@ -1250,9 +1253,33 @@ function ui.drawDashboard(W, H, state)
         end
     end
 
+    -- Инфо-блок в правой колонке: время работы ПК и текущий игрок
+    -- (заполняет пустоту под энергией)
+    local sessY = 12
+    gpu.setForeground(C.title)
+    gpu.set(rightX, sessY, "Сеанс")
+    sessY = sessY + 1
+
+    gpu.setForeground(C.white)
+    gpu.set(rightX, sessY, "Время ПК:")
+    gpu.setForeground(C.ok)
+    local okUp, up = pcall(computer.uptime)
+    gpu.set(rightX + 18, sessY, formatUptime(okUp and up or 0))
+    sessY = sessY + 1
+
+    gpu.setForeground(C.white)
+    gpu.set(rightX, sessY, "Игрок:")
+    if state.currentPlayer then
+        gpu.setForeground(C.ok)
+        gpu.set(rightX + 18, sessY, tostring(state.currentPlayer))
+    else
+        gpu.setForeground(C.muted)
+        gpu.set(rightX + 18, sessY, "нет")
+    end
+
     -- ===== Центр-низ: последние события =====
-    local evY = lastRow - 4
-    if evY < 12 then evY = 12 end
+    -- Фиксировано чуть выше низа (y = 12), чтобы блок не прилипал к кнопкам/статусу.
+    local evY = 12
     if evY > lastRow then evY = lastRow end
 
     gpu.setForeground(C.title)
@@ -1261,6 +1288,9 @@ function ui.drawDashboard(W, H, state)
 
     local logs = state.logs or {}
     local shown = 0
+    -- Строки событий ограничиваем шириной левой колонки, чтобы не залезать
+    -- на блок «Сеанс» в правой колонке.
+    local evMaxW = leftW
     for i = 1, #logs do
         if shown >= 4 then break end
         local e = logs[i]
@@ -1276,7 +1306,7 @@ function ui.drawDashboard(W, H, state)
             when = "--:--"
         end
         local line = string.format("[%s] %s: %s", when, tostring(e.player or "?"), verb)
-        if unicode.len(line) > W - 8 then line = unicode.sub(line, 1, W - 11) .. "..." end
+        if unicode.len(line) > evMaxW then line = unicode.sub(line, 1, evMaxW - 3) .. "..." end
         gpu.setForeground(C.fg)
         gpu.set(leftX, evY, line)
         evY = evY + 1
