@@ -429,7 +429,7 @@ local function startUpdate()
     drawScreen()
 end
 
--- Перезапуск панели: гарантируем автозапуск main.lua в /home/.shrc, затем reboot
+-- Перезапуск панели: гарантируем автозапуск main.lua в /home/.shrc, затем shutdown(true)
 local function restartPanel()
     local shrc = "/home/.shrc"
     local text = ""
@@ -446,7 +446,7 @@ local function restartPanel()
             w:close()
         end
     end
-    computer.reboot()
+    computer.shutdown(true)
 end
 
 local initialPlayer
