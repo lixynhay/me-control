@@ -50,6 +50,8 @@ local state = {
     alertActive = false,
     lastBeep = 0,
     lastAlertCheck = 0,
+    lastAutoCraftCheck = 0,
+    lastAutoCrafts = {},
     searchQuery = "",
     isSearching = false,
     sortMode = "alpha",
@@ -149,6 +151,63 @@ local function notify(msg, level)
     addToast(msg, level)
     -- Сразу показываем плашку, не дожидаясь следующей перерисовки
     pcall(ui.drawToasts, W, H, state.notifications)
+end
+
+-- ===== Автокрафт по лимитам =====
+-- Раз в AUTO_CRAFT_INTERVAL секунд проверяем лимиты и, если предмет просел
+-- ниже минимума, заказываем недостающее (до 1 стака за раз). Повторный запрос
+-- на тот же предмет отправляем не чаще, чем раз в AUTO_CRAFT_COOLDOWN секунд.
+local AUTO_CRAFT_INTERVAL = tonumber(config.autoCraft and config.autoCraft.interval) or 10   -- период проверки
+local AUTO_CRAFT_COOLDOWN = tonumber(config.autoCraft and config.autoCraft.cooldown) or 60  -- защита от спама
+local AUTO_CRAFT_STACK    = tonumber(config.autoCraft and config.autoCraft.maxStack) or 64  -- максимум за запрос
+
+-- Ищет доступный рецепт по имени предмета (кэш state.craftables, при
+-- необходимости подгружает список из МЭ).
+local function findCraftableByName(itemName)
+    if not itemName then return nil end
+    local list = state.craftables
+    if not list or #list == 0 then
+        list = api.getCraftables()
+        state.craftables = list
+    end
+    for _, c in ipairs(list) do
+        if c and c.name == itemName then return c end
+    end
+    return nil
+end
+
+-- Одна итерация автокрафта. Возвращает true, если был отправлен хотя бы один запрос.
+local function runAutoCraft()
+    local status = api.getThresholdStatus()
+    local now = computer.uptime()
+    local sent = false
+
+    for _, item in ipairs(status) do
+        if item and item.isOk == false then
+            local craftable = findCraftableByName(item.name)
+            if craftable then
+                local last = tonumber(state.lastAutoCrafts[item.name]) or -math.huge
+                if now - last >= AUTO_CRAFT_COOLDOWN then
+                    local diff = (tonumber(item.min) or 0) - (tonumber(item.current) or 0)
+                    if diff < 1 then diff = 1 end
+                    local amount = diff > AUTO_CRAFT_STACK and AUTO_CRAFT_STACK or diff
+
+                    local ok, err = api.autoCraft(craftable, amount)
+                    if ok then
+                        state.lastAutoCrafts[item.name] = now
+                        sent = true
+                        local name = tostring(craftable.display or craftable.label or item.label or item.name)
+                        notify("Автокрафт: запущен " .. name .. " x" .. tostring(amount), "info")
+                    else
+                        -- CPU занят / нет ресурсов: молча ждём следующей итерации,
+                        -- каунтдаун НЕ ставим, чтобы попробовать снова через 10 секунд.
+                        _G.last_autocraft_error = tostring(err)
+                    end
+                end
+            end
+        end
+    end
+    return sent
 end
 
 -- Применяет поисковый фильтр к уже загруженному списку (без повторного обращения к МЭ/PIM).
@@ -410,6 +469,16 @@ while true do
         end
     end
     
+    -- Автокрафт по лимитам: раз в 10 секунд (можно отключить в config.autoCraft.enabled)
+    if (config.autoCraft == nil or config.autoCraft.enabled ~= false)
+        and computer.uptime() - (state.lastAutoCraftCheck or 0) > AUTO_CRAFT_INTERVAL then
+        state.lastAutoCraftCheck = computer.uptime()
+        local okAC, errAC = pcall(runAutoCraft)
+        if not okAC then
+            _G.last_autocraft_error = tostring(errAC)
+        end
+    end
+
     -- Ловим все события; фильтрация выполняется ниже по eventName
     local eventName, p1, p2, p3, p4, p5 = event.pull(0.1)
     if eventName == "interrupted" then break end

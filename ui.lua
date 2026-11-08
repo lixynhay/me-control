@@ -915,6 +915,32 @@ function ui.drawStats(W, H, info, storage, history)
         end
     end
 
+    -- Приход / расход энергии (AE/t)
+    if info.avgPowerInjection ~= nil or info.avgPowerUsage ~= nil then
+        local injection = tonumber(info.avgPowerInjection) or 0
+        local usage = tonumber(info.avgPowerUsage) or 0
+        local deficit = usage > injection
+
+        if y <= lastRow then
+            gpu.setForeground(C.white)
+            gpu.set(5, y, "Приход:")
+            gpu.setForeground(C.ok)
+            gpu.set(13, y, string.format("+%.0f AE/t", injection))
+
+            gpu.setForeground(C.white)
+            gpu.set(27, y, "Расход:")
+            gpu.setForeground(C.danger)
+            gpu.set(35, y, string.format("-%.0f AE/t", usage))
+            y = y + 1
+        end
+
+        if deficit and y <= lastRow then
+            gpu.setForeground(C.danger)
+            gpu.set(5, y, "[!] Дефицит энергии!")
+            y = y + 1
+        end
+    end
+
     -- Диски: объём в байтах и количество типов
     if storage then
         local usedBytes  = tonumber(storage.usedBytes) or 0

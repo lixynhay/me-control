@@ -339,15 +339,11 @@ function api.getCraftStatus(status)
     }
 end
 
--- Отправить запрос на крафт. Принимает либо объект-рецепт, либо элемент списка.
--- Возвращает: true, "Запрос отправлен", статус (для отслеживания прогресса)
+-- Ядро запроса крафта (без проверки прав игрока).
+-- Принимает либо объект-рецепт, либо элемент списка ({ craftable = ... }).
+-- Возвращает: true, "Запрос отправлен", статус
 --          или false, "текст причины"
-function api.requestCraft(craftableObject, amount)
-    -- Персональное право: крафт
-    local playerName = getPimPlayer()
-    local denied = checkPermission(playerName, "canCraft", "заказывать крафт")
-    if denied then return false, denied end
-
+local function requestCraftCore(craftableObject, amount)
     local target = craftableObject
     if type(target) == "table" and target.craftable ~= nil then
         target = target.craftable
@@ -377,6 +373,22 @@ function api.requestCraft(craftableObject, amount)
     end
 
     return true, "Запрос отправлен", result
+end
+
+-- Отправить запрос на крафт от имени игрока (проверяет право canCraft).
+function api.requestCraft(craftableObject, amount)
+    -- Персональное право: крафт
+    local playerName = getPimPlayer()
+    local denied = checkPermission(playerName, "canCraft", "заказывать крафт")
+    if denied then return false, denied end
+
+    return requestCraftCore(craftableObject, amount)
+end
+
+-- Автоматический крафт по лимитам: системная операция без проверки прав
+-- конкретного игрока (запускается самим компьютером).
+function api.autoCraft(craftableObject, amount)
+    return requestCraftCore(craftableObject, amount)
 end
 
 -- Получить предметы из МЭ
@@ -619,10 +631,36 @@ function api.getCraftingInfo()
     return result
 end
 
+-- Безопасно читает числовой метод у источника (me_interface/me_controller).
+-- Метод может быть и «прокси» с __call — это тоже поддерживается.
+-- Возвращает число или nil (если метода нет, он упал или вернул не число).
+local function readMethodNumber(source, method)
+    if not source or not method then return nil end
+
+    local okGet, fn = pcall(function() return source[method] end)
+    if not okGet or fn == nil then return nil end
+
+    local okCall, v = pcall(function() return source[method]() end)
+    if okCall and type(v) == "number" then return v end
+
+    if not okCall then
+        local okMt, mt = pcall(getmetatable, fn)
+        if okMt and type(mt) == "table" and mt.__call ~= nil then
+            local ok2, v2 = pcall(function() return mt.__call(fn) end)
+            if ok2 and type(v2) == "number" then return v2 end
+        end
+    end
+    return nil
+end
+
 -- Получить информацию о МЭ-сети (для вкладки «Статистика»)
 function api.getNetworkInfo()
     local me = component.me_interface
-    local info = { totalItems = 0, totalTypes = 0, energyStored = nil, energyMax = nil, cpus = nil }
+    local info = {
+        totalItems = 0, totalTypes = 0,
+        energyStored = nil, energyMax = nil, cpus = nil,
+        avgPowerInjection = nil, avgPowerUsage = nil,
+    }
     
     -- Считаем предметы
     local okItems, items = pcall(function() return me.getItemsInNetwork() end)
@@ -670,7 +708,28 @@ function api.getNetworkInfo()
         end
         if info.energyStored then break end
     end
-    
+
+    -- Средний приход/расход энергии (AE/t) — только для отображения.
+    -- В AE2-интеграции это getAvgPowerInjection()/getAvgPowerUsage(); добавляем
+    -- варианты имён на случай других сборок.
+    local powerPairs = {
+        { "avgPowerInjection", { "getAvgPowerInjection", "getAveragePowerInjection", "getPowerInjection" } },
+        { "avgPowerUsage",     { "getAvgPowerUsage",     "getAveragePowerUsage",     "getPowerUsage" } },
+    }
+    for _, source in ipairs(sources) do
+        for _, pp in ipairs(powerPairs) do
+            if info[pp[1]] == nil then
+                for _, m in ipairs(pp[2]) do
+                    local v = readMethodNumber(source, m)
+                    if v ~= nil then
+                        info[pp[1]] = math.floor(v)
+                        break
+                    end
+                end
+            end
+        end
+    end
+
     -- Пробуем получить список сопроцессоров (если метод есть)
     if me and me.getCpus then
         local ok, cpus = pcall(function() return me.getCpus() end)
@@ -820,11 +879,13 @@ function api.getThresholdStatus()
     
     for name, th in pairs(thresholds) do
         local current = currentMap[name] or 0
+        local minAmount = tonumber(th.min) or 0
         table.insert(list, {
+            name = name,
             label = th.label or name,
             current = current,
-            min = th.min,
-            isOk = current >= th.min
+            min = minAmount,
+            isOk = current >= minAmount
         })
     end
     
