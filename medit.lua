@@ -5,11 +5,17 @@
 -- Горячие клавиши:
 --   Ctrl+S (код 31)  — сохранить файл в текущую директорию
 --   Ctrl+Q (код 16)  — выйти (с предупреждением, если есть несохранённые правки)
+--   Ctrl+F (код 33)  — поиск по тексту (Enter — найти, Esc — отмена)
 --   Esc              — то же, что Ctrl+Q
 --
 -- Навигация: стрелки, PageUp/PageDown, Home/End.
 -- Ввод: обычные символы и цифры, Enter — новая строка, Backspace — удаление
 -- (с поддержкой UTF-8, включая кириллицу, через библиотеку unicode).
+--
+-- Подсветка синтаксиса Lua (без полноценного парсера):
+--   ключевые слова (local, if, then, ...) — цветом C.title (голубой);
+--   комментарии (-- ... до конца строки)   — цветом C.muted (серый);
+--   строки в кавычках ("..." / '...')       — цветом C.ok (зелёный).
 
 local component = require("component")
 local event = require("event")
@@ -54,6 +60,11 @@ local dirty = false         -- есть несохранённые измене�
 local quitArmed = false     -- подтверждение выхода без сохранения
 local statusMsg, statusErr, statusUntil = nil, false, 0
 local running = true
+
+-- Поиск (Ctrl+F)
+local searching = false     -- открыто поле поиска
+local searchQuery = ""      -- вводимый запрос
+local searchMatch = nil     -- { line, col, len } — найденное слово (для подсветки)
 
 -- ===== Утилиты UTF-8 =====
 local function ulen(s) return unicode.len(s or "") end
@@ -168,6 +179,115 @@ local function deleteForward()
     end
 end
 
+-- ===== Подсветка синтаксиса Lua =====
+-- Список ключевых слов рисуется цветом C.title.
+local KEYWORDS = {
+    ["local"] = true, ["if"] = true, ["then"] = true, ["else"] = true,
+    ["elseif"] = true, ["end"] = true, ["function"] = true, ["return"] = true,
+    ["for"] = true, ["while"] = true, ["do"] = true, ["in"] = true,
+    ["and"] = true, ["or"] = true, ["not"] = true, ["nil"] = true,
+    ["true"] = true, ["false"] = true, ["repeat"] = true, ["until"] = true,
+    ["break"] = true, ["goto"] = true,
+}
+
+-- Разбивает строку на куски { text, color }. Без полноценного парсера:
+--   * комментарий "-- ..." (вне строки) — до конца строки, цвет C.muted;
+--   * "строка" или 'строка' (с экранированием \) — цвет C.ok;
+--   * слово-ключевое слово — цвет C.title, остальное — C.fg.
+local function tokenize(line)
+    local segs = {}
+    local n = ulen(line)
+    local i = 1
+
+    local function push(text, color)
+        if text == nil or text == "" then return end
+        local last = segs[#segs]
+        if last and last.color == color then
+            last.text = last.text .. text
+        else
+            segs[#segs + 1] = { text = text, color = color }
+        end
+    end
+
+    while i <= n do
+        local ch = usub(line, i, i)
+        local c2 = usub(line, i + 1, i + 1)
+        if ch == "-" and c2 == "-" then
+            -- Комментарий до конца строки
+            push(usub(line, i, n), C.muted)
+            i = n + 1
+        elseif ch == '"' or ch == "'" then
+            -- Строковый литерал
+            local quote = ch
+            local j = i + 1
+            while j <= n do
+                local cj = usub(line, j, j)
+                if cj == "\\" then
+                    j = j + 2
+                elseif cj == quote then
+                    j = j + 1
+                    break
+                else
+                    j = j + 1
+                end
+            end
+            if j > n + 1 then j = n + 1 end
+            push(usub(line, i, math.min(j - 1, n)), C.ok)
+            i = j
+        elseif ch:match("[%a_]") then
+            -- Идентификатор или ключевое слово (целиком)
+            local j = i
+            while j <= n and usub(line, j, j):match("[%w_]") do j = j + 1 end
+            local word = usub(line, i, j - 1)
+            push(word, KEYWORDS[word] and C.title or C.fg)
+            i = j
+        else
+            push(ch, C.fg)
+            i = i + 1
+        end
+    end
+    return segs
+end
+
+-- Рисует строку с подсветкой; пишет только видимое окно [leftCol .. leftCol+TEXT_W-1].
+local function drawSyntax(row, line)
+    local winStart = leftCol
+    local winEnd = leftCol + TEXT_W - 1
+    local base = 0 -- 0-based индекс символа в исходной строке
+    for _, seg in ipairs(tokenize(line)) do
+        local len = ulen(seg.text)
+        local segStart = base
+        local segStop = base + len - 1
+        local vs = math.max(segStart, winStart)
+        local ve = math.min(segStop, winEnd)
+        if vs <= ve then
+            gpu.setForeground(seg.color)
+            gpu.set(TEXT_X + (vs - winStart), row,
+                usub(seg.text, vs - segStart + 1, ve - segStart + 1))
+        end
+        base = base + len
+        if segStart > winEnd then break end
+    end
+end
+
+-- ===== Поиск (Ctrl+F) =====
+-- Возвращает line (1-based) и col (0-based) первого вхождения (без учёта регистра ASCII).
+local function findFirst(query)
+    if query == "" then return nil end
+    local q = string.lower(query)
+    local m = ulen(q)
+    for li = 1, #lines do
+        local line = lines[li]
+        local n = ulen(line)
+        for ci = 0, n - m do
+            if string.lower(usub(line, ci + 1, ci + m)) == q then
+                return li, ci
+            end
+        end
+    end
+    return nil
+end
+
 -- ===== Отрисовка =====
 local function draw()
     local viewH = H - 1
@@ -193,9 +313,25 @@ local function draw()
             if #num > 3 then num = num:sub(-3) end
             gpu.set(1, row, string.rep(" ", 3 - #num) .. num .. " ")
 
-            -- Текст строки
-            gpu.setForeground(C.fg)
-            gpu.set(TEXT_X, row, clip(usub(lines[ln], leftCol + 1, ulen(lines[ln])), TEXT_W))
+            -- Текст строки с подсветкой синтаксиса Lua
+            drawSyntax(row, lines[ln])
+        end
+    end
+
+    -- Подсветка найденного слова (Ctrl+F) — инверсией цвета
+    if searchMatch then
+        local li, ci, mlen = searchMatch.line, searchMatch.col, searchMatch.len
+        local hrow = li - topLine + 1
+        if hrow >= 1 and hrow <= viewH then
+            local vs = math.max(ci, leftCol)
+            local ve = math.min(ci + mlen - 1, leftCol + TEXT_W - 1)
+            if vs <= ve then
+                gpu.setBackground(C.title)
+                gpu.setForeground(C.bg)
+                gpu.set(TEXT_X + (vs - leftCol), hrow, usub(lines[li], vs + 1, ve + 1))
+                gpu.setBackground(C.bg)
+                gpu.setForeground(C.fg)
+            end
         end
     end
 
@@ -218,7 +354,9 @@ local function draw()
     gpu.fill(1, H, W, 1, " ")
 
     local bar
-    if statusMsg and computer.uptime() < statusUntil then
+    if searching then
+        bar = " Поиск: " .. searchQuery .. "_   (Enter — найти, Esc — отмена)"
+    elseif statusMsg and computer.uptime() < statusUntil then
         bar = " " .. statusMsg
         if statusErr then gpu.setForeground(0xFFB0B0) end
     else
@@ -241,7 +379,49 @@ local function tryQuit()
     end
 end
 
+-- Ввод в поле поиска (режим Ctrl+F)
+local function handleSearchKey(char, code)
+    if code == 1 then                          -- Esc — отменить поиск
+        searching = false
+        searchQuery = ""
+        setStatus("Поиск отменён", false, 2)
+    elseif code == 28 then                     -- Enter — найти
+        local li, ci = findFirst(searchQuery)
+        searching = false
+        if li then
+            cy, cx = li, ci
+            searchMatch = { line = li, col = ci, len = ulen(searchQuery) }
+            setStatus("Найдено: " .. searchQuery .. " (стр. " .. li .. ")", false, 3)
+        else
+            searchMatch = nil
+            setStatus("Не найдено: " .. searchQuery, true, 3)
+        end
+    elseif code == 14 then                     -- Backspace — стереть символ
+        local n = ulen(searchQuery)
+        if n > 0 then searchQuery = usub(searchQuery, 1, n - 1) end
+    elseif code == 33 and char < 32 then       -- повторный Ctrl+F — ничего
+        -- игнорируем
+    elseif char >= 32 and char ~= 127 then     -- обычный символ
+        searchQuery = searchQuery .. uchar(char)
+    end
+    draw()
+end
+
 local function handleKey(char, code)
+    -- В режиме поиска весь ввод идёт в строку поиска
+    if searching then
+        handleSearchKey(char, code)
+        return
+    end
+
+    -- Ctrl+F — открыть поиск (Ctrl даёт управляющий символ < 32)
+    if code == 33 and char < 32 then
+        searching = true
+        searchQuery = ""
+        draw()
+        return
+    end
+
     -- Ctrl+S — сохранить (Ctrl даёт управляющий символ < 32)
     if code == 31 and char < 32 then
         saveFile()
@@ -262,6 +442,7 @@ local function handleKey(char, code)
     end
 
     quitArmed = false
+    searchMatch = nil          -- любая обычная клавиша снимает подсветку поиска
 
     if code == 200 then            -- Up
         cy = cy - 1; clampCursor()
