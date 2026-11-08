@@ -74,7 +74,9 @@ local state = {
     originalLogs = {},
     updateLogs = {},
     isUpdating = false,
-    isUpdateFinished = false
+    isUpdateFinished = false,
+    dirty = true,        -- true = нужна перерисовка экрана
+    lastRender = 0       -- uptime последней отрисовки (троттлинг ~10 кадров/с)
 }
 
 -- ===== Статус-бар =====
@@ -196,17 +198,15 @@ local function runAutoCraft()
                     if diff < 1 then diff = 1 end
                     local amount = diff > AUTO_CRAFT_STACK and AUTO_CRAFT_STACK or diff
 
-                    local ok, err = api.autoCraft(craftable, amount)
+                    local ok = api.autoCraft(craftable, amount)
                     if ok then
                         state.lastAutoCrafts[item.name] = now
                         sent = true
                         local name = tostring(craftable.display or craftable.label or item.label or item.name)
                         notify("Автокрафт: запущен " .. name .. " x" .. math.floor(amount), "info")
-                    else
-                        -- CPU занят / нет ресурсов: молча ждём следующей итерации,
-                        -- каунтдаун НЕ ставим, чтобы попробовать снова через 10 секунд.
-                        _G.last_autocraft_error = tostring(err)
                     end
+                    -- Если CPU занят / нет ресурсов — молча ждём следующей итерации
+                    -- (каунтдаун НЕ ставим, чтобы попробовать снова через 10 секунд).
                 end
             end
         end
@@ -357,6 +357,16 @@ local function drawScreen()
             history = db.getLogsForPlayer(state.adminTarget, 5),
         })
     end
+    -- Модальное окно предмета (ME / INV / CRAFT). Рисуется и здесь, чтобы отложенная
+    -- перерисовка по dirty-флагу не стирала уже открытую карточку.
+    if state.selectedItem then
+        local isCraft = (state.currentTab == "CRAFT")
+        local canAct = isCraft
+            or (state.currentTab == "ME" and api.canWithdraw(state.player))
+            or (state.currentTab == "INV" and api.canDeposit(state.player))
+        ui.drawModal(W, H, state.selectedItem, state.quantity or 1, state.currentTab,
+            canAct and true or false, state.isAdmin)
+    end
     -- Плавающие уведомления поверх всего
     ui.drawToasts(W, H, state.notifications)
     -- После отрисовки основного экрана принудительно рисуем статус, чтобы он не исчез
@@ -365,6 +375,12 @@ local function drawScreen()
     local lvl = state.statusLevel or (state.statusErr and "err" or "ok")
     gpu.setForeground(STATUS_COLOR[lvl] or config.colors.ok)
     gpu.set(3, H - 1, state.statusMsg)
+end
+
+-- Отмечает экран «грязным». Реальная перерисовка выполняется в главном цикле
+-- (см. блок throttling перед event.pull) не чаще одного кадра в 0.1 с.
+local function requestRedraw()
+    state.dirty = true
 end
 
 -- Переключение вкладки: сброс страницы, выбранного предмета и открытых окон.
@@ -380,7 +396,7 @@ local function switchTab(tabId)
     state.isSearching = false
     state.isLogSearching = false
     state.logClearArmed = false
-    updateList(); drawScreen()
+    updateList(); requestRedraw()
     return true
 end
 
@@ -393,7 +409,7 @@ local function startUpdate()
     state.isUpdating = true
     state.isUpdateFinished = false
     state.updateLogs = {}
-    drawScreen()
+    drawScreen()   -- обновление идёт синхронно: рисуем журнал сразу, а не по флагу
 
     local ok, res = updater.run(function(text)
         state.updateLogs[#state.updateLogs + 1] = tostring(text)
@@ -460,6 +476,8 @@ state.statusLevel = "info"
 state.statusErr = false
 
 updateList(); drawScreen()
+state.dirty = false
+state.lastRender = computer.uptime()
 
 local success, err = pcall(function()
 while true do
@@ -497,7 +515,7 @@ while true do
                 state.lastCraftStatus = nil
                 -- Обновляем список/статистику, чтобы показать новые предметы
                 if state.currentTab == "CRAFT" or state.currentTab == "ME" then
-                    updateList(); drawScreen()
+                    updateList(); requestRedraw()
                 end
             elseif st.canceled == true then
                 notify("Крафт отменён", "warn")
@@ -520,7 +538,7 @@ while true do
                 state.isBanned = false
                 state.banInfo = nil
                 setStatus("Срок бана истёк, доступ восстановлен")
-                updateList(); drawScreen()
+                updateList(); requestRedraw()
             end
         end
     end
@@ -529,10 +547,16 @@ while true do
     if (config.autoCraft == nil or config.autoCraft.enabled ~= false)
         and computer.uptime() - (state.lastAutoCraftCheck or 0) > AUTO_CRAFT_INTERVAL then
         state.lastAutoCraftCheck = computer.uptime()
-        local okAC, errAC = pcall(runAutoCraft)
-        if not okAC then
-            _G.last_autocraft_error = tostring(errAC)
-        end
+        -- Ошибку автокрафта не пробрасываем в главный цикл: просто ждём следующей попытки
+        pcall(runAutoCraft)
+    end
+
+    -- Отрисовка по «грязному» флагу: не чаще одного кадра в 0.1 с (~10 FPS).
+    -- Так быстрый ввод (мышь/клавиатура) не заставляет видеокарту рисовать 100 раз в секунду.
+    if state.dirty and (computer.uptime() - state.lastRender > 0.1) then
+        drawScreen()
+        state.dirty = false
+        state.lastRender = computer.uptime()
     end
 
     -- Ловим все события; фильтрация выполняется ниже по eventName
@@ -541,7 +565,7 @@ while true do
 
     -- Убираем устаревшие всплывающие уведомления (живут 4 секунды)
     if #state.notifications > 0 and pruneToasts() then
-        drawScreen()
+        requestRedraw()
     end
     
     -- Автообновление статистики и монитора раз в 2 секунды (не трогаем открытую карточку)
@@ -563,7 +587,7 @@ while true do
             end
         end
 
-        drawScreen()
+        requestRedraw()
         state.lastUpdate = computer.uptime()
     end
     
@@ -596,7 +620,7 @@ while true do
             state.banInfo = banInfo
             state.selectedItem = nil
             setStatus("Доступ запрещён: вы забанены", "err")
-            drawScreen()
+            requestRedraw()
         else
             state.isBanned = false
             state.banInfo = nil
@@ -606,7 +630,7 @@ while true do
                 notify("Вы вошли как администратор")
             end
             state.currentTab = "ME"
-            updateList(); drawScreen()
+            updateList(); requestRedraw()
         end
         
     elseif eventName == "player_off" then
@@ -621,10 +645,10 @@ while true do
         state.banReasonText = ""
         state.isLogSearching = false
         state.currentTab = "ME"
-        state.selectedItem = nil -- ИСПРАВЛЕНИЕ 4: Закрываем открытую карточку при уходе
+        state.selectedItem = nil -- Закрываем открытую карточку при уходе игрока
         state.page = 1
         setStatus("Пользователь покинул PIM", "warn")
-        updateList(); drawScreen()
+        updateList(); requestRedraw()
         
     elseif eventName == "key_down" then
         local keyCode = tonumber(p3) or 0
@@ -660,11 +684,11 @@ while true do
             if state.currentTab == "LOGS" then
                 state.isLogSearching = true
                 state.logSearchQuery = ""
-                applyLogSearchFilter(); drawScreen()
+                applyLogSearchFilter(); requestRedraw()
             elseif state.currentTab == "ME" or state.currentTab == "INV" then
                 state.isSearching = true
                 state.searchQuery = ""
-                applySearchFilter(); drawScreen()
+                applySearchFilter(); requestRedraw()
             else
                 setStatus("Поиск доступен на вкладках: МЭ-сеть, Инвентарь, Журнал", "warn")
             end
@@ -678,7 +702,7 @@ while true do
             if newFilter and newFilter ~= state.logFilter then
                 state.logFilter = newFilter
                 state.logsPage = 1
-                applyLogSearchFilter(); drawScreen()
+                applyLogSearchFilter(); requestRedraw()
                 setStatus("Фильтр журнала: " .. (names[newFilter] or newFilter))
             end
 
@@ -696,16 +720,16 @@ while true do
                 end
                 state.adminTarget = nil
                 state.banReasonText = ""
-                updateList(); drawScreen()
+                updateList(); requestRedraw()
             elseif code == 1 then
                 -- Esc: закрыть окно
                 state.adminTarget = nil
                 state.banReasonText = ""
-                drawScreen()
+                requestRedraw()
             elseif code == 14 then
                 local n = unicode.len(state.banReasonText)
                 if n > 0 then state.banReasonText = unicode.sub(state.banReasonText, 1, n - 1) end
-                drawScreen()
+                requestRedraw()
             else
                 local ch
                 if type(p2) == "number" and p2 > 0 then
@@ -715,7 +739,7 @@ while true do
                 end
                 if ch and ch ~= "" then
                     state.banReasonText = state.banReasonText .. ch
-                    drawScreen()
+                    requestRedraw()
                 end
             end
         elseif state.isLogSearching then
@@ -723,16 +747,16 @@ while true do
             if code == 28 then
                 -- Enter: сохранить фильтр и выйти
                 state.isLogSearching = false
-                applyLogSearchFilter(); drawScreen()
+                applyLogSearchFilter(); requestRedraw()
             elseif code == 1 then
                 -- Esc: сбросить фильтр
                 state.isLogSearching = false
                 state.logSearchQuery = ""
-                applyLogSearchFilter(); drawScreen()
+                applyLogSearchFilter(); requestRedraw()
             elseif code == 14 then
                 local n = unicode.len(state.logSearchQuery)
                 if n > 0 then state.logSearchQuery = unicode.sub(state.logSearchQuery, 1, n - 1) end
-                applyLogSearchFilter(); drawScreen()
+                applyLogSearchFilter(); requestRedraw()
             else
                 local ch
                 if type(p2) == "number" and p2 > 0 then
@@ -742,7 +766,7 @@ while true do
                 end
                 if ch and ch ~= "" then
                     state.logSearchQuery = state.logSearchQuery .. ch
-                    applyLogSearchFilter(); drawScreen()
+                    applyLogSearchFilter(); requestRedraw()
                 end
             end
         elseif state.isSearching then
@@ -751,12 +775,12 @@ while true do
                 -- Enter (28) — применить фильтр и выйти; Esc (1) — выйти и сбросить
                 state.isSearching = false
                 if code == 1 then state.searchQuery = "" end
-                applySearchFilter(); drawScreen()
+                applySearchFilter(); requestRedraw()
             elseif code == 14 then
                 -- Backspace
                 local n = unicode.len(state.searchQuery)
                 if n > 0 then state.searchQuery = unicode.sub(state.searchQuery, 1, n - 1) end
-                applySearchFilter(); drawScreen()
+                applySearchFilter(); requestRedraw()
             else
                 -- p2 в key_down — КОД символа (число), а не строка; в старых версиях может быть строкой
                 local ch
@@ -767,13 +791,13 @@ while true do
                 end
                 if ch and ch ~= "" then
                     state.searchQuery = state.searchQuery .. ch
-                    applySearchFilter(); drawScreen()
+                    applySearchFilter(); requestRedraw()
                 end
             end
         end
         
     elseif eventName == "touch" then
-        -- ИСПРАВЛЕНИЕ 1: Для touch p2 - это X, p3 - это Y, p5 - имя игрока
+        -- Для touch p2 - это X, p3 - это Y, p5 - имя игрока
         local x, y = p2, p3
         local clickPlayer = p5
         
@@ -822,12 +846,12 @@ while true do
                 db.clearLogs()
                 state.logClearArmed = false
                 state.logsPage = 1
-                updateList(); drawScreen()
+                updateList(); requestRedraw()
                 notify("Журнал операций очищен")
             else
                 state.logClearArmed = true
                 state.logClearTime = now
-                drawScreen()
+                requestRedraw()
                 setStatus("Нажмите «ТОЧНО?» ещё раз, чтобы очистить журнал", "warn")
             end
 
@@ -838,7 +862,7 @@ while true do
                     if state.logFilter ~= f.id then
                         state.logFilter = f.id
                         state.logsPage = 1
-                        applyLogSearchFilter(); drawScreen()
+                        applyLogSearchFilter(); requestRedraw()
                     end
                     break
                 end
@@ -855,7 +879,7 @@ while true do
                 state.sortMode = "alpha"
             end
             state.page = 1
-            updateList(); drawScreen()
+            updateList(); requestRedraw()
             local names = { alpha = "А-Я", asc = "по возрастанию", desc = "по убыванию" }
             setStatus("Сортировка: " .. (names[state.sortMode] or state.sortMode))
 
@@ -864,34 +888,34 @@ while true do
             local bottom = ui.getBottomLayout(W)
             if x >= bottom.prev.x and x < bottom.prev.x + bottom.prev.w then
                 if state.currentTab == "LOGS" then
-                    if state.logsPage > 1 then state.logsPage = state.logsPage - 1; drawScreen() end
+                    if state.logsPage > 1 then state.logsPage = state.logsPage - 1; requestRedraw() end
                 elseif state.currentTab == "CRAFT" then
-                    if state.craftPage > 1 then state.craftPage = state.craftPage - 1; drawScreen() end
-                elseif state.page > 1 then state.page = state.page - 1; drawScreen() end
+                    if state.craftPage > 1 then state.craftPage = state.craftPage - 1; requestRedraw() end
+                elseif state.page > 1 then state.page = state.page - 1; requestRedraw() end
             end
             if x >= bottom.refresh.x and x < bottom.refresh.x + bottom.refresh.w then
                 if state.currentTab == "UPD" then
                     startUpdate()
                 else
-                    state.lastUpdate = 0; updateList(); drawScreen(); setStatus("Данные обновлены")
+                    state.lastUpdate = 0; updateList(); requestRedraw(); setStatus("Данные обновлены")
                 end
             end
             if x >= bottom.next.x and x < bottom.next.x + bottom.next.w then
                 if state.currentTab == "LOGS" then
-                    if state.logsPage < state.logsTotalPages then state.logsPage = state.logsPage + 1; drawScreen() end
+                    if state.logsPage < state.logsTotalPages then state.logsPage = state.logsPage + 1; requestRedraw() end
                 elseif state.currentTab == "CRAFT" then
-                    if state.craftPage < state.totalPages then state.craftPage = state.craftPage + 1; drawScreen() end
-                elseif state.page < state.totalPages then state.page = state.page + 1; drawScreen() end
+                    if state.craftPage < state.totalPages then state.craftPage = state.craftPage + 1; requestRedraw() end
+                elseif state.page < state.totalPages then state.page = state.page + 1; requestRedraw() end
             end
             if bottom.search and x >= bottom.search.x and x < bottom.search.x + bottom.search.w then
                 if state.currentTab == "LOGS" then
                     state.isLogSearching = true
                     state.logSearchQuery = ""
-                    applyLogSearchFilter(); drawScreen()
+                    applyLogSearchFilter(); requestRedraw()
                 elseif state.currentTab == "ME" or state.currentTab == "INV" then
                     state.isSearching = true
                     state.searchQuery = ""
-                    applySearchFilter(); drawScreen()
+                    applySearchFilter(); requestRedraw()
                 end
             end
             if state.currentTab == "INV" and bottom.deposit and x >= bottom.deposit.x and x < bottom.deposit.x + bottom.deposit.w then
@@ -901,7 +925,7 @@ while true do
                     setStatus("Доступ запрещён: недостаточно прав", "err")
                 else
                     local moved, msg = api.depositAll()
-                    updateList(); drawScreen()
+                    updateList(); requestRedraw()
                     local isWarn = (moved == 0) or (msg and msg:find("ВНИМАНИЕ", 1, true) ~= nil)
                     notify(msg, isWarn and "warn" or "ok")
                 end
@@ -939,7 +963,7 @@ while true do
                     else
                         notify(tostring(res), "err")
                     end
-                    updateList(); drawScreen()
+                    updateList(); requestRedraw()
 
                 elseif inRect(L.deposit) then
                     local okP, res = db.setPermission(state.player, state.adminTarget, "canDeposit", nil)
@@ -948,7 +972,7 @@ while true do
                     else
                         notify(tostring(res), "err")
                     end
-                    updateList(); drawScreen()
+                    updateList(); requestRedraw()
 
                 elseif inRect(L.craft) then
                     local okP, res = db.setPermission(state.player, state.adminTarget, "canCraft", nil)
@@ -957,7 +981,7 @@ while true do
                     else
                         notify(tostring(res), "err")
                     end
-                    updateList(); drawScreen()
+                    updateList(); requestRedraw()
 
                 elseif inRect(L.ban) then
                     local reason = state.banReasonText
@@ -970,7 +994,7 @@ while true do
                     end
                     state.adminTarget = nil
                     state.banReasonText = ""
-                    updateList(); drawScreen()
+                    updateList(); requestRedraw()
 
                 elseif inRect(L.role) then
                     -- Смена роли по кругу: guest -> user -> moderator -> admin -> banned
@@ -1005,7 +1029,7 @@ while true do
                             notify(tostring(rErr or "Не удалось изменить роль"), "err")
                         end
                     end
-                    updateList(); drawScreen()
+                    updateList(); requestRedraw()
 
                 elseif inRect(L.unban) then
                     local okU, uErr = db.unbanPlayer(state.adminTarget)
@@ -1014,12 +1038,12 @@ while true do
                     else
                         notify("Не удалось разбанить игрока", "err")
                     end
-                    updateList(); drawScreen()
+                    updateList(); requestRedraw()
 
                 elseif inRect(L.close) then
                     state.adminTarget = nil
                     state.banReasonText = ""
-                    drawScreen()
+                    requestRedraw()
                 end
             else
                 -- Клик по строке игрока -> открыть карточку
@@ -1027,7 +1051,7 @@ while true do
                 if y >= 6 and y <= H - 3 and row >= 1 and state.adminList[row] then
                     state.adminTarget = state.adminList[row].name
                     state.banReasonText = ""
-                    drawScreen()
+                    requestRedraw()
                 end
             end
             
@@ -1038,12 +1062,6 @@ while true do
             -- Для крафта «максимум» не ограничен количеством в сети
             local maxQty = isCraft and 1000000 or (tonumber(state.selectedItem.size) or 0)
 
-            local function modalCanAct()
-                if isCraft then return true end
-                return (state.currentTab == "ME" and api.canWithdraw(state.player))
-                    or (state.currentTab == "INV" and api.canDeposit(state.player))
-            end
-
             -- Кнопки количества
             if y == my + 9 then
                 local old = state.quantity
@@ -1052,8 +1070,8 @@ while true do
                 if x >= mx + 29 and x < mx + 35 then state.quantity = math.min(maxQty, state.quantity + 1) end
                 if x >= mx + 36 and x < mx + 42 then state.quantity = math.min(maxQty, state.quantity + 10) end
                 if state.quantity < 1 then state.quantity = 1 end
-                if old ~= state.quantity then 
-                    ui.drawModal(W, H, state.selectedItem, state.quantity, state.currentTab, modalCanAct(), state.isAdmin) 
+                if old ~= state.quantity then
+                    requestRedraw()
                 end
             end
             
@@ -1072,7 +1090,7 @@ while true do
                         notify("Не удалось запросить крафт: " .. tostring(res), "err")
                     end
                     state.selectedItem = nil
-                    updateList(); drawScreen()
+                    updateList(); requestRedraw()
                 else
                     if not state.player then
                         setStatus("Нет активного пользователя (встаньте на PIM)", "err")
@@ -1089,13 +1107,13 @@ while true do
                         end
                         notify(msg, ok and "ok" or "err")
                     end
-                    os.sleep(1.5); state.selectedItem = nil; updateList(); drawScreen()
+                    os.sleep(1.5); state.selectedItem = nil; updateList(); requestRedraw()
                 end
             end
             
             -- Закрыть
             if y == my + mh - 2 and x >= mx + mw - 14 and x < mx + mw - 2 then
-                state.selectedItem = nil; drawScreen()
+                state.selectedItem = nil; requestRedraw()
             end
             
             -- Кнопка лимита (только админ, не для крафта): цикл 100 -> 1000 -> 10000 -> 100000 -> Нет
@@ -1111,8 +1129,7 @@ while true do
                 else newMin = 0 end
                 
                 db.setThreshold(state.selectedItem.name, state.selectedItem.label, newMin)
-                local canAct = (state.currentTab == "ME" and api.canWithdraw(state.player)) or (state.currentTab == "INV" and api.canDeposit(state.player))
-                ui.drawModal(W, H, state.selectedItem, state.quantity, state.currentTab, canAct, state.isAdmin)
+                requestRedraw()
             end
             
         else
@@ -1124,15 +1141,14 @@ while true do
                     if entry then
                         state.selectedItem = entry
                         state.quantity = 1
-                        ui.drawModal(W, H, entry, state.quantity, "CRAFT", true, state.isAdmin)
+                        requestRedraw()
                     end
                 else
                     local idx = (state.page - 1) * (H - 10) + (y - 4)
                     if (state.currentTab == "ME" or state.currentTab == "INV") and state.items[idx] then 
                         state.selectedItem = state.items[idx]
                         state.quantity = 1
-                        local canAct = (state.currentTab == "ME" and api.canWithdraw(state.player)) or (state.currentTab == "INV" and api.canDeposit(state.player))
-                        ui.drawModal(W, H, state.selectedItem, state.quantity, state.currentTab, canAct, state.isAdmin) 
+                        requestRedraw()
                     end
                 end
             end
@@ -1143,8 +1159,8 @@ end
 end)
 
 -- Если произошла ошибка или выход, возвращаем экран в нормальное состояние
-gpu.setBackground(0x000000)
-gpu.setForeground(0xFFFFFF)
+gpu.setBackground(config.colors.overlay)
+gpu.setForeground(config.colors.white)
 gpu.fill(1, 1, W, H, " ")
 if not success then
     print("Скрипт аварийно завершился: " .. tostring(err))

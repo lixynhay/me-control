@@ -13,8 +13,8 @@ function ui.drawFrame(x, y, w, h, color)
     -- Тень: только правая и нижняя кромки (не залезает внутрь рамки)
     local sw, sh = gpu.getResolution()
     if x + w <= sw and y + h <= sh and w > 2 and h > 2 then
-        gpu.setForeground(0x000000)
-        gpu.setBackground(0x000000)
+        gpu.setForeground(C.overlay)
+        gpu.setBackground(C.overlay)
         for i = 1, h - 1 do
             gpu.set(x + w, y + i, "║")
         end
@@ -116,10 +116,10 @@ end
 
 -- ===== Плавающие уведомления (Toasts) =====
 local TOAST_COLORS = {
-    ok   = { border = 0x00AA00, text = 0xFFFFFF, icon = "+" },
-    err  = { border = 0xFF5555, text = 0xFFFFFF, icon = "!" },
-    warn = { border = 0xFFAA00, text = 0xFFFFFF, icon = "!" },
-    info = { border = 0x00AAFF, text = 0xFFFFFF, icon = "i" },
+    ok   = { border = C.ok,      text = C.white, icon = "+" },
+    err  = { border = C.err,     text = C.white, icon = "!" },
+    warn = { border = C.admin,   text = C.white, icon = "!" },
+    info = { border = C.title,   text = C.white, icon = "i" },
 }
 
 -- notifications: массив { text = "...", type = "ok"|"err"|"warn", time = uptime }
@@ -418,7 +418,7 @@ function ui.drawAdminBan(W, H, targetName, opts)
     local perms = opts.perms or {}
     local history = opts.history or {}
 
-    gpu.setBackground(0x000000)
+    gpu.setBackground(C.overlay)
     gpu.fill(1, 1, W, H, " ")
 
     local mw, mh = 58, 22
@@ -502,7 +502,7 @@ function ui.drawAdminBan(W, H, targetName, opts)
     gpu.setForeground(C.white)
     gpu.set(mx + 2, reasonY, "Причина бана:")
 
-    gpu.setBackground(0x111111)
+    gpu.setBackground(C.input)
     gpu.fill(mx + 2, reasonY + 1, mw - 4, 1, " ")
 
     gpu.setForeground(C.ok)
