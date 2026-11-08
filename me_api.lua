@@ -3,8 +3,41 @@ local config = require("config")
 local db = require("db")
 local locale = require("locale")
 local unicode = require("unicode")
+local computer = require("computer")
 
 local api = {}
+
+-- ===== TTL-кэш списка предметов МЭ =====
+-- getItemsInNetwork() — тяжёлый вызов при большой сети (десятки тысяч строк),
+-- поэтому кэшируем «сырой» результат на CACHE_TTL секунд. force=true —
+-- принудительно обновить кэш (сразу после операции выдачи/сдачи).
+local cachedItems = nil
+local cacheTime = 0
+local CACHE_TTL = 2.0
+
+local function getRawItems(force)
+    local me = component.me_interface
+    if force or not cachedItems or (computer.uptime() - cacheTime > CACHE_TTL) then
+        local ok, items = pcall(function() return me.getItemsInNetwork() end)
+        if ok and type(items) == "table" then
+            cachedItems = items
+        elseif not cachedItems then
+            cachedItems = {}
+        end
+        cacheTime = computer.uptime()
+    end
+    return cachedItems
+end
+
+-- Точечный запрос по имени: не выкачивает весь список (Pro-оптимизация).
+-- Возвращает таблицу или nil, если фильтр не поддержан сборкой/упал.
+local function queryItemsByName(itemName)
+    if not itemName then return nil end
+    local me = component.me_interface
+    local ok, items = pcall(function() return me.getItemsInNetwork({ name = itemName }) end)
+    if ok and type(items) == "table" then return items end
+    return nil
+end
 
 -- Удаляет коды форматирования Minecraft (§a, §b, §k и т.д.) из строки
 local function stripColor(text)
@@ -94,11 +127,14 @@ end
 
 -- Сколько предметов данного типа сейчас в МЭ (сначала по name, иначе по label)
 local function getNetworkCount(itemName, itemLabel)
-    local me = component.me_interface
-    local ok, items = pcall(function() return me.getItemsInNetwork() end)
-    if not ok or type(items) ~= "table" then return nil end
     local byName, anyName = 0, false
     local byLabel, anyLabel = 0, false
+
+    -- Точечный запрос по имени (если имя известно) — не тянем всю сеть
+    local nameItems = itemName and queryItemsByName(itemName)
+    local items = nameItems or getRawItems(false)
+    if type(items) ~= "table" then return nil end
+
     for _, i in ipairs(items) do
         if itemName and i.name == itemName then
             byName = byName + (i.size or 0); anyName = true
@@ -107,27 +143,36 @@ local function getNetworkCount(itemName, itemLabel)
             byLabel = byLabel + (i.size or 0); anyLabel = true
         end
     end
+
+    -- Искали по имени, но не нашли, а метка задана — ищем по метке в полном кэше
+    if itemName and not anyName and itemLabel and not anyLabel and nameItems then
+        for _, i in ipairs(getRawItems(false)) do
+            if stripColor(i.label or "") == itemLabel then
+                byLabel = byLabel + (i.size or 0); anyLabel = true
+            end
+        end
+    end
+
     if anyName then return byName end
     if anyLabel then return byLabel end
     return 0
 end
 
 -- Общее количество предметов в МЭ (для агрегированной проверки сдачи)
-local function getTotalNetworkCount()
-    local me = component.me_interface
-    local ok, items = pcall(function() return me.getItemsInNetwork() end)
-    if not ok or type(items) ~= "table" then return nil end
+local function getTotalNetworkCount(force)
+    local items = getRawItems(force)
+    if type(items) ~= "table" then return nil end
     local total = 0
     for _, i in ipairs(items) do total = total + (i.size or 0) end
     return total
 end
 
--- Количество конкретного стека (name + damage) в МЭ
+-- Количество конкретного стека (name + damage) в МЭ.
+-- Использует точечный фильтр getItemsInNetwork({name=...}) — без выкачивания всей сети.
 local function getNetworkCountByStack(itemName, itemDamage)
     if not itemName then return nil end
-    local me = component.me_interface
-    local ok, items = pcall(function() return me.getItemsInNetwork() end)
-    if not ok or type(items) ~= "table" then return nil end
+    local items = queryItemsByName(itemName)
+    if type(items) ~= "table" then items = getRawItems(true) end
     local dmg = tonumber(itemDamage) or 0
     local total = 0
     for _, i in ipairs(items) do
@@ -391,11 +436,9 @@ function api.autoCraft(craftableObject, amount)
     return requestCraftCore(craftableObject, amount)
 end
 
--- Получить предметы из МЭ
-function api.getNetworkItems()
-    local me = component.me_interface
-    local ok, raw = pcall(function() return me.getItemsInNetwork() end)
-    if not ok or type(raw) ~= "table" then return {} end
+-- Получить предметы из МЭ (с TTL-кэшем; force=true — принудительное обновление)
+function api.getNetworkItems(force)
+    local raw = getRawItems(force)
     local list = {}
     for _, i in pairs(raw) do 
         if i and (i.label or i.name) then 
@@ -494,6 +537,7 @@ function api.exportToPlayer(item, amount)
     if actuallyExported > 0 then
         actuallyExported = math.floor(actuallyExported)
         db.addLog(getPimPlayer(), "take", item.display or item.label, actuallyExported)
+        api.getNetworkItems(true) -- сброс кэша: актуальные цифры после выдачи
         return true, "Выдано: " .. actuallyExported .. " шт."
     end
     return false, "МЭ-сеть отклонила выдачу (0 шт.)"
@@ -572,6 +616,7 @@ function api.pushFromPlayer(item, amount)
         end
     end
 
+    api.getNetworkItems(true) -- сброс кэша: актуальные цифры после сдачи
     db.addLog(getPimPlayer(), "put", (type(item) == "table" and item.display) or itemLabel, moved)
     if moved >= amount then
         return true, "Сдано: " .. math.floor(moved) .. " шт."
@@ -668,9 +713,9 @@ function api.getNetworkInfo()
         avgPowerInjection = nil, avgPowerUsage = nil,
     }
     
-    -- Считаем предметы
-    local okItems, items = pcall(function() return me.getItemsInNetwork() end)
-    if okItems and type(items) == "table" then
+    -- Считаем предметы (из TTL-кэша)
+    local items = getRawItems(false)
+    if type(items) == "table" then
         info.totalTypes = #items
         for _, item in ipairs(items) do
             info.totalItems = info.totalItems + (item.size or 0)
@@ -872,10 +917,10 @@ function api.getThresholdStatus()
     local thresholds = db.getThresholds()
     local me = component.me_interface
     
-    -- Карта текущих количеств по имени предмета
+    -- Карта текущих количеств по имени предмета (из TTL-кэша)
     local currentMap = {}
-    local okItems, items = pcall(function() return me.getItemsInNetwork() end)
-    if okItems and type(items) == "table" then
+    local items = getRawItems(false)
+    if type(items) == "table" then
         for _, item in ipairs(items) do
             if item and item.name then
                 currentMap[item.name] = (currentMap[item.name] or 0) + (item.size or 0)
@@ -913,7 +958,7 @@ function api.depositAll()
     size = math.floor(tonumber(size) or 0)
     if size == 0 then return 0, "Инвентарь пуст" end
     
-    local totalBefore = getTotalNetworkCount()
+    local totalBefore = getTotalNetworkCount(true)
     local deposited = {} -- label -> count
     
     for slot = 1, size do
@@ -945,10 +990,11 @@ function api.depositAll()
     
     -- Проверка: всё ли реально попало в МЭ
     os.sleep(0.5)
-    local totalAfter = getTotalNetworkCount()
+    local totalAfter = getTotalNetworkCount(true)
     if totalBefore ~= nil and totalAfter ~= nil and math.floor(totalAfter - totalBefore) < moved then
         return moved, "Некоторые предметы не попали в МЭ-сеть — заберите их из ME Interface вручную"
     end
+    api.getNetworkItems(true) -- сброс кэша: актуальные цифры после массовой сдачи
     return moved, "Сдано всё: " .. math.floor(moved) .. " шт."
 end
 

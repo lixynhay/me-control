@@ -271,7 +271,9 @@ local function applyLogSearchFilter()
     if state.logsPage < 1 then state.logsPage = 1 end
 end
 
-local function updateList()
+local function updateList(force)
+    -- force=true — принудительно обновить TTL-кэш предметов МЭ
+    if force then api.getNetworkItems(true) end
     if state.currentTab == "DASH" then
         -- Дашборд: сводка по сети + список крафт-процессоров + журнал
         state.items = {}
@@ -914,7 +916,7 @@ while true do
                     elseif b.action == "refresh" then
                         state.lastUpdate = 0
                         state.energyHistory = {}
-                        updateList(); requestRedraw()
+                        updateList(true); requestRedraw()
                         setStatus("Данные обновлены")
                     end
                     break
@@ -936,7 +938,7 @@ while true do
                 if state.currentTab == "UPD" then
                     startUpdate()
                 else
-                    state.lastUpdate = 0; updateList(); requestRedraw(); setStatus("Данные обновлены")
+                    state.lastUpdate = 0; updateList(true); requestRedraw(); setStatus("Данные обновлены")
                 end
             end
             if x >= bottom.next.x and x < bottom.next.x + bottom.next.w then
