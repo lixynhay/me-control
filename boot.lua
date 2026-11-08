@@ -15,7 +15,10 @@ local shell = require("shell")
 local gpu = component.gpu
 local config = require("config")
 local ui = require("ui")
-local updater = require("updater")
+-- pcall: если updater.lua оказался несовместимой/битой версией, boot всё равно
+-- должен запустить панель, а не упасть.
+local okUpdater, updater = pcall(require, "updater")
+if not okUpdater or type(updater) ~= "table" then updater = {} end
 
 local VERSION_FILE = "/home/version.txt"
 local SHRC_FILE = "/home/.shrc"
@@ -125,6 +128,30 @@ local function progressFromLog(text)
     return nil
 end
 
+-- Полное обновление через updater.run (общий путь для обычного и fallback-режима).
+local function runUpdate(label)
+    if type(updater.run) ~= "function" then
+        log("updater.run недоступен — запуск локальной версии")
+        return
+    end
+    local ok, res = updater.run(function(text)
+        log(text)
+        render(label, progressFromLog(text))
+    end)
+    if ok then
+        -- 7d. Успех
+        ensureShrc() -- активируем boot.lua до перезагрузки
+        render("Обновление завершено! Перезагрузка...", 100)
+        os.sleep(1)
+        computer.shutdown(true)
+    else
+        -- 7e. Ошибка
+        log("ОШИБКА: " .. tostring(res))
+        render("Ошибка обновления: " .. tostring(res), nil)
+        os.sleep(3)
+    end
+end
+
 -- ===== 1. Splash =====
 render("Загрузка ME-CONTROL...", nil)
 
@@ -137,44 +164,39 @@ if config.boot and config.boot.autoUpdate == false then
 end
 
 -- ===== 3. Проверка обновлений =====
-render("Проверка обновлений...", nil)
-local remote, err = updater.checkRemoteVersion()
+if type(updater.checkRemoteVersion) == "function" then
+    render("Проверка обновлений...", nil)
+    local okCheck, remote, err = pcall(updater.checkRemoteVersion)
+    if not okCheck then
+        remote, err = nil, tostring(remote)
+    end
 
--- ===== 5. Нет связи =====
-if remote == nil then
-    log("Нет связи: " .. tostring(err))
-    render("Нет связи с GitHub. Запуск локальной версии...", nil)
-    os.sleep(2)
-    launch()
-end
+    -- ===== 5. Нет связи =====
+    if remote == nil then
+        log("Нет связи: " .. tostring(err))
+        render("Нет связи с GitHub. Запуск локальной версии...", nil)
+        os.sleep(2)
+        launch()
+    end
 
--- ===== 6. Версия актуальна =====
-if remote == localVersion then
-    render("Версия актуальна: " .. remote, nil)
+    -- ===== 6. Версия актуальна =====
+    if remote == localVersion then
+        render("Версия актуальна: " .. remote, nil)
+        os.sleep(1)
+        launch()
+    end
+
+    -- ===== 7. Доступно обновление =====
+    render("Доступно обновление: " .. localVersion .. " → " .. remote, 0)
     os.sleep(1)
-    launch()
-end
-
--- ===== 7. Доступно обновление =====
-render("Доступно обновление: " .. localVersion .. " → " .. remote, 0)
-os.sleep(1)
-
-local ok, res = updater.run(function(text)
-    log(text)
-    render("Обновление: " .. remote, progressFromLog(text))
-end)
-
-if ok then
-    -- 7d. Успех
-    ensureShrc() -- активируем boot.lua до перезагрузки
-    render("Обновление завершено! Перезагрузка...", 100)
-    os.sleep(1)
-    computer.shutdown(true)
+    runUpdate("Обновление: " .. remote)
 else
-    -- 7e. Ошибка
-    log("ОШИБКА: " .. tostring(res))
-    render("Ошибка обновления: " .. tostring(res), nil)
-    os.sleep(3)
+    -- ===== 3a. Старый/несовместимый updater.lua =====
+    -- Метода проверки версии нет — принудительно запускаем полное обновление.
+    log("updater.checkRemoteVersion недоступен — полное обновление")
+    render("Проверка версии недоступна. Полное обновление...", 0)
+    os.sleep(1)
+    runUpdate("Обновление системы...")
 end
 
 -- ===== 8. Запуск панели =====

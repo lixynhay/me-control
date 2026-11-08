@@ -1472,15 +1472,17 @@ function ui.drawBootScreen(W, H, opts)
     gpu.setForeground(C.fg)
     gpu.fill(1, 1, W, H, " ")
 
-    -- ASCII-арт ME-CONTROL
-    local art = {
-        " __  __ ___    ___ ___  _  _ _____ ___  _   ___  _ ",
-        "|  \\/  | __|  / __/ _ \\| \\| |_   _/ _ \\| | | _ \\| |",
-        "| |\\/| | _|  | (_| (_) | .` | | || (_) | |_|   /| |",
-        "|_|  |_|___|  \\___\\___/|_|\\_| |_| \\___/|___|_|_\\|_|",
-    }
+    -- Логотип ME-CONTROL: большой ASCII-арт на широких экранах,
+    -- компактный текст на узких (например, 80x25).
     local artY = 2
-    if W >= 20 then
+    local logoHeight
+    if W >= 100 then
+        local art = {
+            " __  __ ___    ___ ___  _  _ _____ ___  _   ___  _ ",
+            "|  \\/  | __|  / __/ _ \\| \\| |_   _/ _ \\| | | _ \\| |",
+            "| |\\/| | _|  | (_| (_) | .` | | || (_) | |_|   /| |",
+            "|_|  |_|___|  \\___\\___/|_|\\_| |_| \\___/|___|_|_\\|_|",
+        }
         gpu.setForeground(C.title)
         for i, line in ipairs(art) do
             local draw = line
@@ -1489,9 +1491,20 @@ function ui.drawBootScreen(W, H, opts)
             if ax < 1 then ax = 1 end
             gpu.set(ax, artY + i - 1, draw)
         end
+        logoHeight = #art
+    else
+        -- Компактный логотип: разреженные буквы, гарантированно влезает в W
+        local logo = "M E - C O N T R O L"
+        if unicode.len(logo) > W - 2 then logo = "ME-CONTROL" end
+        if unicode.len(logo) > W - 2 then logo = unicode.sub(logo, 1, math.max(1, W - 2)) end
+        gpu.setForeground(C.title)
+        local lx = math.floor((W - unicode.len(logo)) / 2) + 1
+        if lx < 1 then lx = 1 end
+        gpu.set(lx, artY, logo)
+        logoHeight = 1
     end
 
-    local y = artY + #art + 1
+    local y = artY + logoHeight + 1
 
     -- Статус (цвет по смыслу сообщения)
     local color = C.fg
