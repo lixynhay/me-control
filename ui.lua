@@ -1508,11 +1508,13 @@ function ui.drawBootScreen(W, H, opts)
 
     -- Статус (цвет по смыслу сообщения)
     local color = C.fg
-    if status:find("актуальна", 1, true) or status:find("завершено", 1, true) then
+    if status:find("актуальна", 1, true) or status:find("завершено", 1, true)
+        or status:find("Все файлы на месте", 1, true) then
         color = C.ok
     elseif status:find("Доступно обновление", 1, true) then
         color = C.admin
-    elseif status:find("Ошибка", 1, true) or status:find("Нет связи", 1, true) then
+    elseif status:find("Ошибка", 1, true) or status:find("Нет связи", 1, true)
+        or status:find("Отсутствует", 1, true) then
         color = C.err
     elseif status:find("Проверка", 1, true) or status:find("Загрузка", 1, true) then
         color = C.title
@@ -1546,19 +1548,44 @@ function ui.drawBootScreen(W, H, opts)
         y = y + 2
     end
 
-    -- Логи (последние, что влезают над строкой версии)
+    -- Логи (последние, что влезают над строкой версии).
+    -- На стандартных экранах (>=50x16) область вмещает >=8 строк. Если строк
+    -- больше, показываем последние N и итог "... и ещё X файлов" (серым).
     local bottomLimit = H - 1
     local avail = bottomLimit - y + 1
     if avail > 0 and #logs > 0 then
         local shown = math.min(#logs, avail)
+        local hidden = #logs - shown
+        if hidden > 0 then
+            -- Оставляем одну строку под итог
+            shown = math.max(0, avail - 1)
+            hidden = #logs - shown
+        end
         local startIdx = #logs - shown + 1
         for i = startIdx, #logs do
             local line = tostring(logs[i] or "")
             if unicode.len(line) > W - 4 then line = unicode.sub(line, 1, W - 7) .. "..." end
             local ry = y + (i - startIdx)
             if ry <= bottomLimit then
-                gpu.setForeground(line:find("ОШИБКА", 1, true) and C.err or C.muted)
+                local lc = C.muted
+                if line:find("^%[OK%]") or line:find("^Все файлы на месте") then
+                    lc = C.ok
+                elseif line:find("^%[MISS%]") or line:find("^Отсутствует") then
+                    lc = C.err
+                elseif line:find("ОШИБКА", 1, true) then
+                    lc = C.err
+                end
+                gpu.setForeground(lc)
                 gpu.set(3, ry, line)
+            end
+        end
+        if hidden > 0 then
+            local summary = "... и ещё " .. hidden .. " файлов"
+            if unicode.len(summary) > W - 4 then summary = unicode.sub(summary, 1, W - 7) .. "..." end
+            local ry = y + shown
+            if ry <= bottomLimit then
+                gpu.setForeground(C.muted)
+                gpu.set(3, ry, summary)
             end
         end
     end

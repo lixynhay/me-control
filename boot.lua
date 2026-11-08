@@ -152,6 +152,59 @@ local function runUpdate(label)
     end
 end
 
+-- Проверка наличия файлов из /home/manifest.txt.
+-- Используется для актуальной версии и при autoUpdate=false (без проверки версии).
+-- Каждый файл: [OK] <path> (зелёный) / [MISS] <path> (красный); в конце итог.
+local function showFileCheck()
+    local manifestPath = "/home/manifest.txt"
+    local f = io.open(manifestPath, "r")
+    if not f then
+        log("manifest.txt не найден — проверка файлов пропущена")
+        render("Проверка файлов: manifest.txt не найден", nil)
+        return
+    end
+    local text = f:read("*a") or ""
+    f:close()
+
+    local files = {}
+    for line in text:gmatch("[^\r\n]+") do
+        line = line:match("^%s*(.-)%s*$")
+        if line ~= "" and not line:match("^#") then
+            files[#files + 1] = line
+        end
+    end
+
+    if #files == 0 then
+        log("manifest.txt пуст")
+        render("Проверка файлов: manifest.txt пуст", nil)
+        return
+    end
+
+    render("Проверка файлов...", nil)
+    local okCount, missCount = 0, 0
+    for i, path in ipairs(files) do
+        if filesystem.exists("/home/" .. path) then
+            okCount = okCount + 1
+            log("[OK] " .. path)
+        else
+            missCount = missCount + 1
+            log("[MISS] " .. path)
+        end
+        -- Плавно: перерисовываем каждые 3 файла и на последнем
+        if i % 3 == 0 or i == #files then
+            render("Проверка файлов...", nil)
+        end
+    end
+
+    if missCount == 0 then
+        log("Все файлы на месте (" .. okCount .. ")")
+        render("Все файлы на месте (" .. okCount .. ")", nil)
+    else
+        log("Отсутствует " .. missCount .. " файлов")
+        render("Отсутствует " .. missCount .. " файлов", nil)
+    end
+end
+
 -- ===== 1. Splash =====
 render("Загрузка ME-CONTROL...", nil)
 
@@ -160,6 +213,9 @@ local localVersion = readLocalVersion()
 
 -- ===== 5. Отключённое автообновление =====
 if config.boot and config.boot.autoUpdate == false then
+    -- Версию не проверяем, но целостность файлов показываем
+    showFileCheck()
+    os.sleep(1)
     launch()
 end
 
@@ -183,10 +239,13 @@ if type(updater.checkRemoteVersion) == "function" then
     if remote == localVersion then
         render("Версия актуальна: " .. remote, nil)
         os.sleep(1)
+        showFileCheck()
+        os.sleep(1)
         launch()
     end
 
     -- ===== 7. Доступно обновление =====
+    -- Статус показываем до runUpdate; список файлов рисует callback updater.run.
     render("Доступно обновление: " .. localVersion .. " → " .. remote, 0)
     os.sleep(1)
     runUpdate("Обновление: " .. remote)
