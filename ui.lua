@@ -462,15 +462,19 @@ end
 
 -- Строка истории: "[12:30] Сдал 64x Iron Ingot"
 local function formatLogLine(entry)
-    local action = entry.action == "put" and "Сдал" or "Взял"
+    local action = entry.action
+    local label = "Взял"
+    if action == "put" then label = "Сдал"
+    elseif action == "craft" then label = "Скрафтил" end
     local amount = math.floor(tonumber(entry.amount) or 0)
     local item = tostring(entry.item or "?")
-    return "[" .. formatLogTime(entry.time) .. "] " .. action .. " " .. amount .. "x " .. item
+    return "[" .. formatLogTime(entry.time) .. "] " .. label .. " " .. amount .. "x " .. item
 end
 
 local function logActionColor(action)
     if action == "put" then return C.ok end
     if action == "take" then return C.warning end
+    if action == "craft" then return C.title end
     return C.fg
 end
 
@@ -630,6 +634,127 @@ function ui.getAdminBanLayout(W, H)
         unban    = { x = mx + 33,     y = my + mh - 2, w = 11 },
         close    = { x = mx + mw - 12, y = my + mh - 2, w = 10 },
     }
+end
+
+-- ===== Личная история операций игрока =====
+-- entries — массив записей лога (свежие первыми), до ui.PLAYER_HISTORY_ROWS штук.
+ui.PLAYER_HISTORY_ROWS = 10
+
+function ui.getPlayerHistoryLayout(W, H, count)
+    local mw = 52
+    local rows = math.max(1, math.min(tonumber(count) or 1, ui.PLAYER_HISTORY_ROWS))
+    local mh = 5 + rows
+    local mx = math.floor((W - mw) / 2) + 1
+    local my = math.floor((H - mh) / 2) + 1
+    return {
+        mx = mx, my = my, mw = mw, mh = mh, rows = rows,
+        close = { x = mx + mw - 14, y = my + mh - 2, w = 12 },
+    }
+end
+
+function ui.drawPlayerHistory(W, H, playerName, entries)
+    entries = entries or {}
+    local shown = math.min(#entries, ui.PLAYER_HISTORY_ROWS)
+    local L = ui.getPlayerHistoryLayout(W, H, math.max(shown, 1))
+
+    gpu.setBackground(C.overlay)
+    gpu.fill(1, 1, W, H, " ")
+    gpu.setBackground(C.modal)
+    gpu.fill(L.mx, L.my, L.mw, L.mh, " ")
+    ui.drawFrame(L.mx, L.my, L.mw, L.mh, C.title)
+
+    gpu.setForeground(C.title)
+    local title = " История операций: " .. tostring(playerName or "?") .. " "
+    if unicode.len(title) > L.mw - 2 then title = unicode.sub(title, 1, L.mw - 5) .. "... " end
+    gpu.set(L.mx + math.floor((L.mw - unicode.len(title)) / 2) + 1, L.my, title)
+
+    if shown == 0 then
+        gpu.setForeground(C.muted)
+        gpu.set(L.mx + 3, L.my + 2, "Нет операций")
+    else
+        local maxLen = L.mw - 6
+        for i = 1, shown do
+            local e = entries[i]
+            local line = formatLogLine(e)
+            if unicode.len(line) > maxLen then
+                line = unicode.sub(line, 1, maxLen - 3) .. "..."
+            end
+            gpu.setForeground(logActionColor(e.action))
+            gpu.set(L.mx + 3, L.my + 1 + i, line)
+        end
+    end
+
+    ui.drawButton(L.close.x, L.close.y, L.close.w, "ЗАКРЫТЬ", false, C.disabled)
+    gpu.setBackground(C.bg)
+    gpu.setForeground(C.fg)
+end
+
+-- ===== Детали предмета (Raw ID / Damage / NBT) =====
+-- NBT определяем по отпечатку МЭ или полю nbt: у обычных предметов их нет.
+function ui.itemHasNbt(item)
+    if type(item) ~= "table" then return false end
+    if item.nbt ~= nil then return true end
+    if item.fingerprint ~= nil and item.fingerprint ~= "" then return true end
+    return false
+end
+
+function ui.getItemInfoLayout(W, H)
+    local mw, mh = 56, 12
+    local mx = math.floor((W - mw) / 2) + 1
+    local my = math.floor((H - mh) / 2) + 1
+    return {
+        mx = mx, my = my, mw = mw, mh = mh,
+        close = { x = mx + mw - 14, y = my + mh - 2, w = 12 },
+    }
+end
+
+function ui.drawItemInfo(W, H, item)
+    item = item or {}
+    local L = ui.getItemInfoLayout(W, H)
+
+    gpu.setBackground(C.overlay)
+    gpu.fill(1, 1, W, H, " ")
+    gpu.setBackground(C.modal)
+    gpu.fill(L.mx, L.my, L.mw, L.mh, " ")
+    ui.drawFrame(L.mx, L.my, L.mw, L.mh, C.title)
+
+    gpu.setForeground(C.title)
+    local title = " Детали предмета "
+    gpu.set(L.mx + math.floor((L.mw - unicode.len(title)) / 2) + 1, L.my, title)
+
+    local maxLen = L.mw - 14
+    local function row(y, label, value, color)
+        gpu.setForeground(C.white)
+        gpu.set(L.mx + 2, y, label)
+        local text = tostring(value)
+        if unicode.len(text) > maxLen then text = unicode.sub(text, 1, maxLen - 3) .. "..." end
+        gpu.setForeground(color or C.fg)
+        gpu.set(L.mx + 14, y, text)
+    end
+
+    row(L.my + 2, "Название:", api.cleanLabel(tostring(item.display or item.label or "?")), C.fg)
+    row(L.my + 3, "Raw ID:", tostring(item.name or "?"), C.title)
+
+    local damage = math.floor(tonumber(item.damage) or 0)
+    if damage > 0 then
+        row(L.my + 4, "Damage:", tostring(damage), C.admin)
+    end
+
+    if ui.itemHasNbt(item) then
+        row(L.my + 5, "NBT:", "Есть NBT-данные", C.ok)
+        local fp = item.fingerprint
+        if fp ~= nil and fp ~= "" then
+            -- В МЭ отпечаток часто приходит таблицей: показываем это явно, а не "table: 0x..."
+            local fpText = (type(fp) == "table") and "объект МЭ (hash)" or tostring(fp)
+            row(L.my + 6, "Fingerprint:", fpText, C.muted)
+        end
+    else
+        row(L.my + 5, "NBT:", "Без NBT", C.muted)
+    end
+
+    ui.drawButton(L.close.x, L.close.y, L.close.w, "ЗАКРЫТЬ", false, C.disabled)
+    gpu.setBackground(C.bg)
+    gpu.setForeground(C.fg)
 end
 
 function ui.drawMonitor(W, H, statusList)
@@ -1221,7 +1346,7 @@ local ACTION_VERB = {
 -- Раскладка кнопок дашборда (общая для отрисовки и обработки кликов)
 function ui.getDashboardLayout(W, H)
     local bw, gap = 17, 2
-    local total = bw * 3 + gap * 2
+    local total = bw * 4 + gap * 3
     local x = math.floor((W - total) / 2) + 1
     if x < 2 then x = 2 end
     local function mk(off, action, text)
@@ -1230,7 +1355,8 @@ function ui.getDashboardLayout(W, H)
     return {
         mk(0,              "net",     "МЭ-СЕТЬ"),
         mk(bw + gap,       "deposit", "СДАТЬ ВСЁ"),
-        mk((bw + gap) * 2, "refresh", "ОБНОВИТЬ"),
+        mk((bw + gap) * 2, "history", "МОИ ДЕЙСТВИЯ"),
+        mk((bw + gap) * 3, "refresh", "ОБНОВИТЬ"),
     }
 end
 
@@ -1513,6 +1639,9 @@ function ui.drawModal(W, H, item, qty, mode, canAction, isAdmin, reason)
     gpu.set(mx + 17, my + 9, string.rep(" ", math.max(0, 10 - unicode.len(q))) .. q)
     ui.drawButton(mx + 29, my + 9, 6, "+1", false)
     ui.drawButton(mx + 36, my + 9, 6, "+10", false)
+
+    -- Технические детали предмета (Raw ID / Damage / NBT)
+    ui.drawButton(mx + 2, my + 11, 10, "[i] Инфо", false, C.title)
     
     -- Кнопка действия (неактивна, если нет прав или игрока)
     local btnText, btnBg

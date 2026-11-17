@@ -489,11 +489,25 @@ function db.getLogsForPlayer(name, limit)
     return out
 end
 
--- Получить массив логов (свежие первыми)
-function db.getLogs()
+-- Получить массив логов (свежие первыми).
+-- Без аргументов — весь журнал. С playerName — только его записи (последние limit).
+function db.getLogs(playerName, limit)
     if not data then return {} end
     if not data.logs then data.logs = {} end
-    return data.logs
+    if playerName == nil then
+        return data.logs
+    end
+
+    local out = {}
+    local maxN = math.floor(tonumber(limit) or 10)
+    if maxN <= 0 then return out end
+    for _, e in ipairs(data.logs) do
+        if e and e.player == playerName then
+            out[#out + 1] = e
+            if #out >= maxN then break end
+        end
+    end
+    return out
 end
 
 -- Полностью очистить журнал операций

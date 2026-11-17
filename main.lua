@@ -67,6 +67,10 @@ local state = {
     canCraftAction = false, -- роль + глобальный флаг: можно ли заказывать
     globalRestrictions = {}, -- расшифровки сработавших глобальных запретов
     showRestrictions = false,
+    showHistory = false,      -- открыта личная история операций
+    historyEntries = {},
+    showItemInfo = false,     -- открыты детали предмета (Raw ID / NBT)
+    itemInfo = nil,
     adminTarget = nil,
     isTechAdmin = false,
     banReasonText = "",
@@ -420,6 +424,14 @@ local function drawScreen()
     end
     -- Плавающие уведомления поверх всего
     ui.drawToasts(W, H, state.notifications)
+    -- Личная история операций игрока
+    if state.showHistory then
+        ui.drawPlayerHistory(W, H, state.player or state.currentPlayer, state.historyEntries)
+    end
+    -- Детали предмета (Raw ID / Damage / NBT)
+    if state.showItemInfo and state.itemInfo then
+        ui.drawItemInfo(W, H, state.itemInfo)
+    end
     -- Расшифровка глобальных запретов — самый верхний слой
     if state.showRestrictions then
         ui.drawRestrictions(W, H, state.globalRestrictions)
@@ -936,6 +948,25 @@ while true do
         elseif onRestrictions then
             state.showRestrictions = true
             requestRedraw()
+        elseif state.showHistory then
+            -- Личная история: закрытие по кнопке или клику вне окна
+            local L = ui.getPlayerHistoryLayout(W, H, math.max(#state.historyEntries, 1))
+            local onClose = x >= L.close.x and x < L.close.x + L.close.w and y == L.close.y
+            local inside = x >= L.mx and x < L.mx + L.mw and y >= L.my and y < L.my + L.mh
+            if onClose or not inside then
+                state.showHistory = false
+                requestRedraw()
+            end
+        elseif state.showItemInfo then
+            -- Детали предмета: закрытие по кнопке или клику вне окна
+            local L = ui.getItemInfoLayout(W, H)
+            local onClose = x >= L.close.x and x < L.close.x + L.close.w and y == L.close.y
+            local inside = x >= L.mx and x < L.mx + L.mw and y >= L.my and y < L.my + L.mh
+            if onClose or not inside then
+                state.showItemInfo = false
+                state.itemInfo = nil
+                requestRedraw()
+            end
         elseif state.currentPlayer == nil then
             setStatus("Нет активного пользователя (встаньте на PIM)", "err")
         elseif clickPlayer ~= state.currentPlayer then
@@ -1022,6 +1053,14 @@ while true do
                             updateList(); requestRedraw()
                             local isWarn = (moved == 0) or (msg and msg:find("ВНИМАНИЕ", 1, true) ~= nil)
                             notify(msg, isWarn and "warn" or "ok")
+                        end
+                    elseif b.action == "history" then
+                        if not state.player then
+                            setStatus("Нет активного пользователя (встаньте на PIM)", "err")
+                        else
+                            state.historyEntries = db.getLogs(state.player, ui.PLAYER_HISTORY_ROWS)
+                            state.showHistory = true
+                            requestRedraw()
                         end
                     elseif b.action == "refresh" then
                         state.lastUpdate = 0
@@ -1242,6 +1281,13 @@ while true do
                 if old ~= state.quantity then
                     requestRedraw()
                 end
+            end
+
+            -- «[i] Инфо» — технические детали предмета
+            if y == my + 11 and x >= mx + 2 and x < mx + 12 then
+                state.itemInfo = state.selectedItem
+                state.showItemInfo = true
+                requestRedraw()
             end
             
             -- Кнопка действия
