@@ -111,8 +111,82 @@ local function ensureShrc()
     end
 end
 
--- Запуск панели: активируем автозапуск, затем shell.execute + выход
+-- ===== Аварийное восстановление: UTF-8 BOM в файлах из manifest.txt =====
+-- OpenOS не понимает BOM в начале .lua и падает с "unexpected symbol".
+-- Если битый файл уже лежит на диске, чиним его до запуска панели.
+local BOM = "\239\187\191"
+
+local function readHead(path, n)
+    local f = io.open(path, "rb")
+    if not f then return nil end
+    local head = f:read(n) or ""
+    f:close()
+    return head
+end
+
+local function readWhole(path)
+    local f = io.open(path, "rb")
+    if not f then return nil end
+    local text = f:read("*a")
+    f:close()
+    return text
+end
+
+-- Перезапись без BOM: атомарно через *.tmp -> rename.
+local function fixBomInFile(path)
+    local head = readHead(path, 3)
+    if not head or head ~= BOM then return false end
+
+    local text = readWhole(path)
+    if not text then return false end
+    local clean = text:sub(4)
+
+    local tmpPath = path .. ".tmp"
+    local w = io.open(tmpPath, "wb")
+    if not w then return false end
+    local okWrite = pcall(function() w:write(clean) end)
+    w:close()
+    if not okWrite then
+        filesystem.remove(tmpPath)
+        return false
+    end
+
+    if filesystem.exists(path) then filesystem.remove(path) end
+    local renamed = filesystem.rename(tmpPath, path)
+    if not renamed then
+        filesystem.remove(tmpPath)
+        return false
+    end
+    return true
+end
+
+local function checkAndFixBOM()
+    local f = io.open("/home/manifest.txt", "r")
+    if not f then return end
+    local text = f:read("*a") or ""
+    f:close()
+
+    local fixed = 0
+    for line in text:gmatch("[^\r\n]+") do
+        line = line:match("^%s*(.-)%s*$")
+        if line ~= "" and not line:match("^#") then
+            local path = "/home/" .. line
+            if filesystem.exists(path) and fixBomInFile(path) then
+                fixed = fixed + 1
+                log("[FIX] Исправлен BOM в " .. line)
+                render("Исправление BOM...", nil)
+            end
+        end
+    end
+
+    if fixed > 0 then
+        log("BOM исправлен в файлах: " .. fixed)
+    end
+end
+
+-- Запуск панели: чиним BOM, активируем автозапуск, затем shell.execute + выход
 local function launch()
+    checkAndFixBOM()
     ensureShrc()
     render("Запуск панели...", nil)
     pcall(shell.execute, "main.lua")

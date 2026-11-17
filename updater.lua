@@ -124,7 +124,19 @@ local function looksLikeApiError(text)
     return text:match('^%s*{%s*"message"') ~= nil
 end
 
--- Скачивание одного файла с атомарной записью (*.tmp -> rename)
+-- UTF-8 BOM (EF BB BF): OpenOS не умеет его разбирать в начале .lua,
+-- из-за него main.lua падает с "unexpected symbol". Вырезаем при записи.
+local BOM = "\239\187\191"
+
+local function stripBom(text)
+    if type(text) == "string" and #text >= 3 and text:sub(1, 3) == BOM then
+        return text:sub(4), true
+    end
+    return text, false
+end
+
+-- Скачивание одного файла с атомарной записью (*.tmp -> rename).
+-- Первые байты буферизуются, чтобы удалить BOM до записи на диск.
 local function downloadFile(filePath, headers)
     local targetPath = TARGET_DIR .. filePath
     local tmpPath = targetPath .. ".tmp"
@@ -142,7 +154,24 @@ local function downloadFile(filePath, headers)
     if not file then return false, "не удалось открыть файл на запись" end
 
     local bytes = 0
+    local hadBom = false
+    local head = nil        -- буфер до накопления 3 байт
+    local headDone = false  -- BOM проверен, дальше пишем потоком
     local startedAt = computer.uptime()
+
+    -- Проверить/очистить накопленный заголовок и записать его.
+    local function flushHead(final)
+        if headDone or head == nil then return end
+        if not final and #head < 3 then return end
+        local clean
+        clean, hadBom = stripBom(head)
+        if #clean > 0 then
+            file:write(clean)
+            bytes = bytes + #clean
+        end
+        head, headDone = nil, true
+    end
+
     local ok, err = pcall(function()
         local first = true
         for chunk in resp do
@@ -152,12 +181,18 @@ local function downloadFile(filePath, headers)
                     error("GitHub API: " .. chunk:sub(1, 100))
                 end
             end
-            file:write(chunk)
-            bytes = bytes + #chunk
+            if headDone then
+                file:write(chunk)
+                bytes = bytes + #chunk
+            else
+                head = (head or "") .. chunk
+                flushHead(false)
+            end
             if computer.uptime() - startedAt > READ_TIMEOUT then
                 error("timeout: превышен лимит " .. READ_TIMEOUT .. " с")
             end
         end
+        flushHead(true)  -- файл короче 3 байт
     end)
 
     file:close()
@@ -167,6 +202,12 @@ local function downloadFile(filePath, headers)
         return false, tostring(err)
     end
 
+    -- Целостность: пустой файл не должен затирать рабочий.
+    if bytes == 0 then
+        filesystem.remove(tmpPath)
+        return false, "пустой файл"
+    end
+
     if filesystem.exists(targetPath) then filesystem.remove(targetPath) end
     local renamed, renameErr = filesystem.rename(tmpPath, targetPath)
     if not renamed then
@@ -174,7 +215,7 @@ local function downloadFile(filePath, headers)
         return false, "не удалось переименовать: " .. tostring(renameErr)
     end
 
-    return true, bytes
+    return true, bytes, hadBom
 end
 
 -- ================== ПУБЛИЧНОЕ API ==================
@@ -252,11 +293,14 @@ function updater.run(progressCallback)
 
     for i, filePath in ipairs(filesToDownload) do
         progress(string.format("[%d/%d] Скачивание %s...", i, totalFiles, filePath))
-        local ok, info = downloadFile(filePath, headers)
+        local ok, info, hadBom = downloadFile(filePath, headers)
         if ok then
             successCount = successCount + 1
             totalBytes = totalBytes + info
             progress(string.format("[%d/%d] OK: %s | %s", i, totalFiles, filePath, formatSize(info)))
+            if hadBom then
+                progress("[BOM] Удален BOM из " .. filePath)
+            end
         else
             failed = failed + 1
             progress(string.format("[%d/%d] ОШИБКА: %s | %s", i, totalFiles, filePath, tostring(info)))

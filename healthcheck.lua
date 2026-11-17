@@ -123,7 +123,17 @@ local function collectMetrics()
     }
 
     local okDate, dateStr = pcall(os.date, "%Y-%m-%dT%H:%M:%S")
-    metrics.ts = (okDate and dateStr) or "unknown"
+    local okTime, nowSecs = pcall(os.time)
+    nowSecs = okTime and tonumber(nowSecs) or nil
+    metrics.uptime_secs = math.floor(tonumber(computer.uptime()) or 0)
+
+    -- Без RTC и без синхронизации os.time() отдаёт 1970-й: все записи слились бы
+    -- в одну дату. В этом случае пишем uptime, чтобы строки различались.
+    if nowSecs and nowSecs >= 1000000000 then
+        metrics.ts = (okDate and dateStr) or ("uptime_" .. metrics.uptime_secs)
+    else
+        metrics.ts = "uptime_" .. metrics.uptime_secs
+    end
 
     local okCfg, config = pcall(require, "config")
     if okCfg and type(config) == "table" and config.version then
@@ -182,7 +192,7 @@ end
 
 local function buildHistoryLine(metrics)
     return string.format(
-        '{"ts":%s,"version":%s,"mem_total_kb":%s,"mem_free_kb":%s,"items_count":%s,"cold_call_ms":%s,"me_iface_ok":%s,"pim_ok":%s,"allow_withdraw":%s,"allow_deposit":%s,"allow_craft":%s}',
+        '{"ts":%s,"version":%s,"mem_total_kb":%s,"mem_free_kb":%s,"items_count":%s,"cold_call_ms":%s,"me_iface_ok":%s,"pim_ok":%s,"allow_withdraw":%s,"allow_deposit":%s,"allow_craft":%s,"uptime_secs":%s}',
         jsonString(metrics.ts),
         jsonString(metrics.version),
         jsonInt(metrics.mem_total_kb),
@@ -193,7 +203,8 @@ local function buildHistoryLine(metrics)
         jsonBool(metrics.pim_ok),
         jsonBool(metrics.allow_withdraw),
         jsonBool(metrics.allow_deposit),
-        jsonBool(metrics.allow_craft)
+        jsonBool(metrics.allow_craft),
+        jsonInt(metrics.uptime_secs)
     )
 end
 
@@ -289,7 +300,14 @@ end
 local okMain, mainErr = pcall(function()
     out("=== ME-Control Health Check ===")
     local okDate, dateStr = pcall(os.date, "%Y-%m-%d %H:%M:%S")
-    if okDate and dateStr then out("Время: " .. tostring(dateStr)) end
+    local okTime, nowSecs = pcall(os.time)
+    nowSecs = okTime and tonumber(nowSecs) or nil
+    if nowSecs and nowSecs >= 1000000000 then
+        if okDate and dateStr then out("Время: " .. tostring(dateStr)) end
+    else
+        -- Нет RTC/синхронизации: вместо 1970-го показываем uptime.
+        out(string.format("Время: нет синхронизации (uptime %.0f с)", computer.uptime()))
+    end
 
     -- ===== Версия =====
     local okCfg, config = pcall(require, "config")
