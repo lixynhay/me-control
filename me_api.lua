@@ -59,13 +59,17 @@ local function denyReason(playerName, field, label)
         return "Вам запрещено: " .. label
     end
     local cfg = db.getConfig()
-    if field == "canWithdraw" and cfg.allowUserWithdraw == false then
+    -- nil трактуем как «разрешено»: старые БД без ключа ведут себя как дефолт true.
+    local allowWithdraw = cfg.allowUserWithdraw ~= false
+    local allowDeposit = cfg.allowUserDeposit ~= false
+    local allowCraft = cfg.allowUserCraft ~= false
+    if field == "canWithdraw" and not allowWithdraw then
         return "Вам запрещено: " .. label
     end
-    if field == "canDeposit" and cfg.allowUserDeposit == false then
+    if field == "canDeposit" and not allowDeposit then
         return "Вам запрещено: " .. label
     end
-    if field == "canCraft" and cfg.allowUserCraft == false then
+    if field == "canCraft" and not allowCraft then
         return "Вам запрещено: " .. label
     end
     return "Вам запрещено: " .. label

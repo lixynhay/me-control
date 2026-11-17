@@ -7,5 +7,6 @@ main.lua
 locale.lua
 locale_generated.lua
 medit.lua
+healthcheck.lua
 updater.lua
 version.txt

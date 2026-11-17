@@ -1,6 +1,6 @@
 local config = {}
 
-config.version = "v1.12.0"
+config.version = "v1.12.1"
 
 -- Смарт-загрузчик (boot.lua): автообновление при старте.
 -- false — boot.lua сразу запускает main.lua без проверки GitHub.

@@ -5,6 +5,22 @@ local db = {}
 local DB_PATH = "/home/database.dat"
 local data = nil
 
+-- Глобальные права по умолчанию. true = текущее фактическое поведение при
+-- отсутствии ключа (nil трактуется как «разрешено»), но теперь состояние явное.
+local DEFAULT_CONFIG = {
+    allowUserWithdraw = true,
+    allowUserDeposit = true,
+    allowUserCraft = true,
+}
+
+local function defaultConfig()
+    return {
+        allowUserWithdraw = true,
+        allowUserDeposit = true,
+        allowUserCraft = true,
+    }
+end
+
 -- ===== Иерархия ролей =====
 -- Чем больше число, тем больше прав. Управлять можно только теми, кто НИЖЕ.
 db.ROLE_LEVELS = {
@@ -61,9 +77,7 @@ function db.hasPermission(actorName, targetName, action)
     end
 
     -- Дополнительные ограничения по конкретному действию
-    if action == "ban" and actorLevel < 3 then
-        return false, "Банить могут модераторы и выше"
-    end
+    -- (ban уже покрыт общим guard'ом actorLevel < 3 выше).
     if action == "setRole" and actorLevel < 4 then
         return false, "Менять роли могут администраторы и выше"
     end
@@ -76,6 +90,10 @@ end
 
 -- Загрузка базы данных из файла
 function db.load()
+    -- Сбрасываем прежнее состояние: повторный load() должен корректно
+    -- обрабатывать замену/повреждение database.dat, а не держать старые данные.
+    data = nil
+
     -- Читаем основной файл; если его нет, пробуем недописанный *.tmp
     -- (после аварии он может быть единственным валидным источником).
     local function readFrom(path)
@@ -89,55 +107,102 @@ function db.load()
         return nil
     end
 
+    -- Однократный бэкап исходного файла перед миграцией/восстановлением.
+    -- Если .bak уже есть, не перезаписываем: он хранит состояние до первой миграции.
+    local function backupOnce(sourcePath)
+        local bakPath = DB_PATH .. ".bak"
+        if filesystem.exists(bakPath) then return true end
+        local src = io.open(sourcePath, "r")
+        if not src then return false end
+        local content = src:read("*a")
+        src:close()
+        local dst = io.open(bakPath, "w")
+        if not dst then return false end
+        local ok = pcall(function() dst:write(content) end)
+        dst:close()
+        return ok
+    end
+
     local loaded = readFrom(DB_PATH)
+    local loadedPath = DB_PATH
     if not loaded then
         loaded = readFrom(DB_PATH .. ".tmp")
+        loadedPath = DB_PATH .. ".tmp"
     end
+
+    local changed = false
 
     if loaded then
         data = loaded
-        data.players = data.players or {}
-        data.config = data.config or { allowUserWithdraw = true, allowUserDeposit = true }
-        data.thresholds = data.thresholds or {}
-        data.logs = data.logs or {}
-        for _, p in pairs(data.players) do
-            if p.banReason == nil then p.banReason = "" end
-            if p.banExpires == nil then p.banExpires = 0 end
-            -- Миграция: персональные права (появились в v1.7.0)
-            if p.canWithdraw == nil then p.canWithdraw = true end
-            if p.canDeposit == nil then p.canDeposit = true end
-            if p.canCraft == nil then p.canCraft = true end
-            -- Миграция: статистика профиля (v1.7.1)
-            if p.totalActions == nil then p.totalActions = 0 end
-            if p.lastSeen == nil then p.lastSeen = 0 end
+        -- Восстановление из *.tmp всегда закрепляем в основном файле,
+        -- иначе после следующей перезагрузки данные останутся только в .tmp.
+        if loadedPath ~= DB_PATH then changed = true end
+        if type(data.players) ~= "table" then
+            data.players = {}
+            changed = true
         end
+        -- Миграция конфига: гарантируем все три ключа allowUser*.
+        if type(data.config) ~= "table" then
+            data.config = defaultConfig()
+            changed = true
+        else
+            for key, value in pairs(DEFAULT_CONFIG) do
+                if data.config[key] == nil then
+                    data.config[key] = value
+                    changed = true
+                end
+            end
+        end
+        if type(data.thresholds) ~= "table" then
+            data.thresholds = {}
+            changed = true
+        end
+        if type(data.logs) ~= "table" then
+            data.logs = {}
+            changed = true
+        end
+        for _, p in pairs(data.players) do
+            if p.banReason == nil then p.banReason = ""; changed = true end
+            if p.banExpires == nil then p.banExpires = 0; changed = true end
+            -- Миграция: персональные права (появились в v1.7.0)
+            if p.canWithdraw == nil then p.canWithdraw = true; changed = true end
+            if p.canDeposit == nil then p.canDeposit = true; changed = true end
+            if p.canCraft == nil then p.canCraft = true; changed = true end
+            -- Миграция: статистика профиля (v1.7.1)
+            if p.totalActions == nil then p.totalActions = 0; changed = true end
+            if p.lastSeen == nil then p.lastSeen = 0; changed = true end
+        end
+        if changed then backupOnce(loadedPath) end
     end
-    
+
     -- Если файла нет или он поврежден, создаем структуру по умолчанию
     if not data then
+        -- Повреждённый файл сохраняем в .bak (однократно) — для разбора.
+        if filesystem.exists(DB_PATH) then
+            backupOnce(DB_PATH)
+        elseif filesystem.exists(DB_PATH .. ".tmp") then
+            backupOnce(DB_PATH .. ".tmp")
+        end
         data = {
             players = {
                 ["lixynhay"] = { role = "admin" }
             },
-            config = {
-                allowUserWithdraw = true,
-                allowUserDeposit = true
-            },
+            config = defaultConfig(),
             thresholds = {},
             logs = {}
         }
-        db.save() -- Сразу сохраняем стандартные настройки
+        changed = true
     end
-    
+
     -- Технический администратор: роль всегда techadmin, аккаунт создаётся при необходимости
     if data.players["lixynhay"] then
         local p = data.players["lixynhay"]
-        p.role = "techadmin"
-        if p.canWithdraw == nil then p.canWithdraw = true end
-        if p.canDeposit == nil then p.canDeposit = true end
-        if p.canCraft == nil then p.canCraft = true end
-        if p.totalActions == nil then p.totalActions = 0 end
-        if p.lastSeen == nil then p.lastSeen = 0 end
+        if p.role ~= "techadmin" then p.role = "techadmin"; changed = true end
+        if p.canWithdraw == nil then p.canWithdraw = true; changed = true end
+        if p.canDeposit == nil then p.canDeposit = true; changed = true end
+        if p.canCraft == nil then p.canCraft = true; changed = true end
+        if p.totalActions == nil then p.totalActions = 0; changed = true end
+        if p.lastSeen == nil then p.lastSeen = 0; changed = true end
     else
         data.players["lixynhay"] = {
             role = "techadmin",
@@ -145,8 +210,12 @@ function db.load()
             totalActions = 0, lastSeen = 0,
             banReason = "", banExpires = 0,
         }
+        changed = true
     end
-    db.save()
+
+    -- Сохраняем только при изменениях (миграция/создание), чтобы не переписывать
+    -- здоровую БД на каждом запуске.
+    if changed then db.save() end
 end
 
 -- Сохранение базы данных в файл (атомарно: *.tmp -> rename)
@@ -324,9 +393,17 @@ function db.getAllPlayers()
     return {}
 end
 
--- Получить глобальные настройки
+-- Получить глобальные настройки.
+-- Всегда возвращает все три ключа allowUser*: отсутствующие/битые значения
+-- заменяются дефолтами (true), даже если database.dat нет или он повреждён.
 function db.getConfig()
-    return data and data.config or {}
+    local cfg = defaultConfig()
+    if data and type(data.config) == "table" then
+        for key, value in pairs(data.config) do
+            cfg[key] = value
+        end
+    end
+    return cfg
 end
 
 -- Изменить глобальную настройку
