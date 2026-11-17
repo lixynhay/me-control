@@ -1,4 +1,4 @@
--- Сброс кэша модулей проекта: обновления через getcode подхватываются без перезагрузки
+﻿-- Сброс кэша модулей проекта: обновления через getcode подхватываются без перезагрузки
 package.loaded["ui"] = nil
 package.loaded["me_api"] = nil
 package.loaded["db"] = nil
@@ -63,6 +63,8 @@ local state = {
     lastBanCheck = 0,
     isBanned = false,
     banInfo = nil,
+    canCraftTab = false,    -- роль >= user: видна ли вкладка «Крафт»
+    canCraftAction = false, -- роль + глобальный флаг: можно ли заказывать
     adminTarget = nil,
     isTechAdmin = false,
     banReasonText = "",
@@ -302,7 +304,7 @@ local function updateList(force)
         state.storageInfo = api.getStorageInfo()
         state.networkInfo.storage = state.storageInfo
         state.networkInfo.crafting = api.getCraftingInfo()
-    elseif state.currentTab == "CRAFT" then
+    elseif state.currentTab == "CRAFT" and state.canCraftTab then
         state.items = {}
         state.craftables = api.getCraftables()
         state.totalPages = math.max(1, math.ceil(#state.craftables / math.max(1, H - 10)))
@@ -348,6 +350,15 @@ local function drawScreen()
         ui.drawBannedScreen(W, H, state.banInfo)
         return
     end
+    local level = state.player and db.getRoleLevel(state.player) or config.LEVEL_BANNED
+    state.canCraftTab = level >= config.LEVEL_USER
+    state.canCraftAction = state.canCraftTab and api.canCraft(state.player)
+    if state.currentTab == "CRAFT" and not state.canCraftTab then
+        state.currentTab = "DASH"
+        state.selectedItem = nil
+        updateList()
+        notify("Крафт доступен с роли user", "err")
+    end
     ui.drawMain(W, H, state)
     -- Окно управления игроком (роль / права / статистика) поверх админки
     if state.currentTab == "ADMIN" and state.adminTarget then
@@ -369,11 +380,13 @@ local function drawScreen()
     -- перерисовка по dirty-флагу не стирала уже открытую карточку.
     if state.selectedItem then
         local isCraft = (state.currentTab == "CRAFT")
-        local canAct = isCraft
+        local canAct = (isCraft and state.canCraftAction)
             or (state.currentTab == "ME" and api.canWithdraw(state.player))
             or (state.currentTab == "INV" and api.canDeposit(state.player))
+        local reason
+        if isCraft and not canAct then reason = "Крафт отключён администратором" end
         ui.drawModal(W, H, state.selectedItem, state.quantity or 1, state.currentTab,
-            canAct and true or false, state.isAdmin)
+            canAct and true or false, state.isAdmin, reason)
     end
     -- Плавающие уведомления поверх всего
     ui.drawToasts(W, H, state.notifications)
@@ -393,8 +406,19 @@ end
 
 -- Переключение вкладки: сброс страницы, выбранного предмета и открытых окон.
 -- Используется и кликами по вкладкам, и горячими клавишами F1–F6.
+local function canCraftRole(playerName)
+    if not playerName then return false end
+    return (db.getRoleLevel(playerName) or config.LEVEL_BANNED) >= config.LEVEL_USER
+end
+
 local function switchTab(tabId)
     if tabId == nil or tabId == state.currentTab then return false end
+    state.canCraftTab = canCraftRole(state.player)
+    state.canCraftAction = state.canCraftTab and api.canCraft(state.player)
+    if tabId == "CRAFT" and not state.canCraftTab then
+        setStatus("Крафт доступен с роли user", "err")
+        return false
+    end
     state.currentTab = tabId
     state.page = 1
     state.craftPage = 1
@@ -479,6 +503,8 @@ if initialPlayer and initialPlayer ~= "" then
         state.isAdmin = db.isAdmin(state.player)
         state.canModerate = db.isModerator(state.player)
         state.isTechAdmin = (pData.role == "techadmin")
+        state.canCraftTab = canCraftRole(state.player)
+        state.canCraftAction = state.canCraftTab and api.canCraft(state.player)
     end
     local banned, banInfo = db.checkBan(state.player)
     if banned then
@@ -624,6 +650,8 @@ while true do
         state.isAdmin = db.isAdmin(state.player)
         state.canModerate = db.isModerator(state.player)
         state.isTechAdmin = pData and (pData.role == "techadmin") or false
+        state.canCraftTab = canCraftRole(state.player)
+        state.canCraftAction = state.canCraftTab and api.canCraft(state.player)
 
         if isNew then
             notify("Новый игрок: " .. state.player)
@@ -656,6 +684,8 @@ while true do
         state.currentPlayer = nil
         state.isAdmin = false
         state.canModerate = false
+        state.canCraftTab = false
+        state.canCraftAction = false
         state.isBanned = false
         state.banInfo = nil
         state.adminTarget = nil
@@ -689,14 +719,14 @@ while true do
         local hotkeyTab = keyToTab(keyCode)
 
         if hotkeyTab then
-            -- F1–F6: переключение вкладок (работает в любом режиме)
+            -- F1–F6: переключение вкладок (работает в любом режиме).
+            -- Доступ к крафту перечитывается из БД в switchTab.
             local needsModeration = (hotkeyTab == "LOGS" or hotkeyTab == "ADMIN")
             if needsModeration and not state.canModerate then
                 setStatus("Недостаточно прав: раздел доступен администратору", "err")
             else
                 switchTab(hotkeyTab)
             end
-
         elseif (keyCode == 53 or charCode == 47) and not typingText then
             -- «/» — быстрый поиск (аналог кнопки «ПОИСК»)
             if state.currentTab == "LOGS" then
@@ -842,7 +872,7 @@ while true do
         
         -- Переключение вкладок
         if y == 2 then
-            local layout = ui.getTabLayout(W, state.canModerate, state.isAdmin)
+            local layout = ui.getTabLayout(W, state.canModerate, state.isAdmin, state.canCraftTab)
             local newTab = state.currentTab
             
             for _, tab in ipairs(layout) do
@@ -1124,6 +1154,16 @@ while true do
             -- Кнопка действия
             if y == my + mh - 2 and x >= mx + 2 and x < mx + 20 then
                 if isCraft then
+                    -- Роль перечитываем перед каждым заказом: вкладка могла остаться
+                    -- открытой после понижения роли / отключения крафта.
+                    state.canCraftTab = canCraftRole(state.player)
+        state.canCraftAction = state.canCraftTab and api.canCraft(state.player)
+                    if not state.canCraftTab then
+                        notify("Крафт доступен с роли user", "err")
+                        state.selectedItem = nil
+                        requestRedraw()
+                        return
+                    end
                     -- «СКРАФТИТЬ»
                     local ok, res, status = api.requestCraft(state.selectedItem, state.quantity)
                     if ok then

@@ -1,6 +1,14 @@
 local config = {}
 
-config.version = "v1.12.2"
+config.version = "v1.12.3"
+
+-- Уровни ролей (используются в проверках прав крафта). Не трогаем db.lua.
+config.LEVEL_BANNED    = 0
+config.LEVEL_GUEST     = 1
+config.LEVEL_USER      = 2
+config.LEVEL_MODERATOR = 3
+config.LEVEL_ADMIN     = 4
+config.LEVEL_TECHADMIN = 5
 
 -- Смарт-загрузчик (boot.lua): автообновление при старте.
 -- false — boot.lua сразу запускает main.lua без проверки GitHub.

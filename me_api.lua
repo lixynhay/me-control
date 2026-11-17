@@ -55,6 +55,14 @@ local function denyReason(playerName, field, label)
     if p.role == "banned" then
         return "Доступ запрещён: вы забанены"
     end
+    -- Крафт: роль ниже user запрещена независимо от глобального allowUserCraft.
+    -- Бан уже проверен выше — сообщение для banned остаётся прежним.
+    if field == "canCraft" then
+        local level = db.getRoleLevel(playerName)
+        if level < (config.LEVEL_USER or 2) then
+            return "Крафт доступен с роли user"
+        end
+    end
     if p[field] == false then
         return "Вам запрещено: " .. label
     end
@@ -649,6 +657,7 @@ end
 
 function api.canCraft(playerName)
     if not playerName then return false end
+    if (db.getRoleLevel(playerName) or 0) < (config.LEVEL_USER or 2) then return false end
     return db.canCraft(playerName)
 end
 

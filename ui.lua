@@ -42,15 +42,18 @@ function ui.drawButton(x, y, w, text, pressed, bg)
     gpu.setForeground(C.fg)
 end
 
-function ui.getTabs(canModerate, isAdmin)
+function ui.getTabs(canModerate, isAdmin, canCraft)
+    if canCraft == nil then canCraft = true end  -- обратная совместимость вызовов
     local tabs = {
         { id = "DASH",  label = " Главная " },
         { id = "ME",    label = " МЭ-сеть " },
         { id = "INV",   label = " Инвентарь " },
         { id = "STATS", label = " Статистика " },
-        { id = "CRAFT", label = " Крафт " },
         { id = "MON",   label = " Монитор " }
     }
+    if canCraft then
+        table.insert(tabs, 5, { id = "CRAFT", label = " Крафт " })
+    end
     if canModerate then
         table.insert(tabs, { id = "LOGS",  label = " Журнал " })
         table.insert(tabs, { id = "ADMIN", label = " Админ " })
@@ -61,8 +64,8 @@ function ui.getTabs(canModerate, isAdmin)
     return tabs
 end
 
-function ui.getTabLayout(W, canModerate, isAdmin)
-    local tabs = ui.getTabs(canModerate, isAdmin)
+function ui.getTabLayout(W, canModerate, isAdmin, canCraft)
+    local tabs = ui.getTabs(canModerate, isAdmin, canCraft)
     local totalW = 0
     for _, tab in ipairs(tabs) do totalW = totalW + unicode.len(tab.label) + 2 end
     totalW = totalW - 2
@@ -103,8 +106,8 @@ function ui.getBottomLayout(W)
     return L
 end
 
-function ui.drawTabs(W, currentTab, canModerate, isAdmin)
-    local layout = ui.getTabLayout(W, canModerate, isAdmin)
+function ui.drawTabs(W, currentTab, canModerate, isAdmin, canCraft)
+    local layout = ui.getTabLayout(W, canModerate, isAdmin, canCraft)
     for _, tab in ipairs(layout) do
         gpu.setBackground(currentTab == tab.id and C.tab_active or C.tab_inactive)
         -- OC GPU не умеет жирный шрифт: активная вкладка — ярко-белая, неактивные — приглушённые
@@ -198,7 +201,7 @@ function ui.drawMain(W, H, state)
     if unicode.len(who) > W - 4 then who = unicode.sub(who, 1, W - 7) .. "..." end
     gpu.set(W - unicode.len(who) - 1, 1, who)
     
-    ui.drawTabs(W, state.currentTab, state.canModerate, state.isAdmin)
+    ui.drawTabs(W, state.currentTab, state.canModerate, state.isAdmin, state.canCraftTab)
     
     -- Нижняя панель кнопок рисуется для всех вкладок (до ветвлений с return).
     -- На «Главной» (DASH) своя панель кнопок рисуется в ui.drawDashboard —
@@ -1379,7 +1382,7 @@ function ui.drawCraft(W, H, craftables, page, totalPages)
     gpu.setForeground(C.fg)
 end
 
-function ui.drawModal(W, H, item, qty, mode, canAction, isAdmin)
+function ui.drawModal(W, H, item, qty, mode, canAction, isAdmin, reason)
     local isCraft = (mode == "CRAFT")
     gpu.setBackground(C.overlay)
     gpu.fill(1, 1, W, H, " ")
@@ -1443,6 +1446,12 @@ function ui.drawModal(W, H, item, qty, mode, canAction, isAdmin)
         btnBg = canAction and C.warning or C.disabled
     end
     ui.drawButton(mx + 2, my + mh - 2, 18, btnText, false, btnBg)
+    
+    -- Подсказка под кнопкой действия, если действие недоступно
+    if not canAction and reason then
+        gpu.setForeground(C.warning)
+        gpu.set(mx + 2, my + mh - 1, string.sub(reason, 1, mw - 4))
+    end
     
     -- Кнопка лимита (только для админа, над «ЗАКРЫТЬ»; для крафта не нужна)
     if isAdmin and not isCraft then
