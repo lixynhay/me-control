@@ -21,6 +21,7 @@ local filesystem = require("filesystem")
 local LOG_PATH = "/home/healthcheck.log"
 local DB_PATH = "/home/database.dat"
 local report = {}
+local chunkArgs = { ... }
 
 local function out(line)
     report[#report + 1] = tostring(line)
@@ -63,6 +64,227 @@ local function rawCall()
 end
 
 local startedAt = computer.uptime()
+
+-- ===== Режим --append: одна компактная JSON-строка в healthcheck.history =====
+local HISTORY_PATH = "/home/healthcheck.history"
+local HISTORY_MAX_LINES = 200
+local HISTORY_KEEP_LINES = 100
+
+local function hasAppendArg()
+    local arg = rawget(_G, "arg")
+    if type(arg) == "table" then
+        for _, v in ipairs(arg) do
+            if v == "--append" then return true end
+        end
+    end
+    for _, v in ipairs(chunkArgs) do
+        if v == "--append" then return true end
+    end
+    return false
+end
+
+local function jsonEscape(value)
+    local s = tostring(value or "")
+    s = s:gsub("\\", "\\\\")
+    s = s:gsub('"', '\\"')
+    s = s:gsub("\n", "\\n")
+    s = s:gsub("\r", "\\r")
+    s = s:gsub("\t", "\\t")
+    return s
+end
+
+local function jsonString(value)
+    return '"' .. jsonEscape(value) .. '"'
+end
+
+local function jsonBool(value)
+    if value == true then return "true" end
+    if value == false then return "false" end
+    return "null"
+end
+
+local function jsonInt(value)
+    return tostring(math.floor(tonumber(value) or 0))
+end
+
+-- Те же измерения, что и в полном отчёте, но без повторов и без записи лога.
+local function collectMetrics()
+    local metrics = {
+        version = "unknown",
+        mem_total_kb = 0,
+        mem_free_kb = 0,
+        items_count = -1,
+        cold_call_ms = -1,
+        me_iface_ok = false,
+        pim_ok = false,
+        allow_withdraw = nil,
+        allow_deposit = nil,
+        allow_craft = nil,
+    }
+
+    local okDate, dateStr = pcall(os.date, "%Y-%m-%dT%H:%M:%S")
+    metrics.ts = (okDate and dateStr) or "unknown"
+
+    local okCfg, config = pcall(require, "config")
+    if okCfg and type(config) == "table" and config.version then
+        metrics.version = tostring(config.version)
+    end
+
+    pcall(function()
+        metrics.mem_total_kb = math.floor(tonumber(computer.totalMemory()) or 0)
+        metrics.mem_free_kb = math.floor(tonumber(computer.freeMemory()) or 0)
+    end)
+
+    metrics.me_iface_ok = componentAvailable("me_interface")
+    metrics.pim_ok = componentAvailable("pim")
+
+    if metrics.me_iface_ok then
+        local okApi, api = pcall(require, "me_api")
+        local t0 = computer.uptime()
+        local okCall, items
+        if okApi and type(api) == "table" and type(api.getNetworkItems) == "function" then
+            okCall, items = pcall(api.getNetworkItems)
+        else
+            local me = getComponent("me_interface")
+            if me then
+                okCall, items = pcall(function() return me.getItemsInNetwork() end)
+            else
+                okCall, items = false, "me_interface недоступен"
+            end
+        end
+        local dt = computer.uptime() - t0
+        if okCall then
+            metrics.items_count = countItems(items)
+            metrics.cold_call_ms = math.floor(dt * 1000 + 0.5)
+        end
+    end
+
+    local okDb, db = pcall(require, "db")
+    if okDb and type(db) == "table" then
+        local dbExists = filesystem.exists(DB_PATH) or filesystem.exists(DB_PATH .. ".tmp")
+        if dbExists then pcall(db.load) end
+        local okGet, cfg = pcall(db.getConfig)
+        if okGet and type(cfg) == "table" then
+            if cfg.allowUserWithdraw ~= nil then
+                metrics.allow_withdraw = cfg.allowUserWithdraw ~= false
+            end
+            if cfg.allowUserDeposit ~= nil then
+                metrics.allow_deposit = cfg.allowUserDeposit ~= false
+            end
+            if cfg.allowUserCraft ~= nil then
+                metrics.allow_craft = cfg.allowUserCraft ~= false
+            end
+        end
+    end
+
+    return metrics
+end
+
+local function buildHistoryLine(metrics)
+    return string.format(
+        '{"ts":%s,"version":%s,"mem_total_kb":%s,"mem_free_kb":%s,"items_count":%s,"cold_call_ms":%s,"me_iface_ok":%s,"pim_ok":%s,"allow_withdraw":%s,"allow_deposit":%s,"allow_craft":%s}',
+        jsonString(metrics.ts),
+        jsonString(metrics.version),
+        jsonInt(metrics.mem_total_kb),
+        jsonInt(metrics.mem_free_kb),
+        jsonInt(metrics.items_count),
+        jsonInt(metrics.cold_call_ms),
+        jsonBool(metrics.me_iface_ok),
+        jsonBool(metrics.pim_ok),
+        jsonBool(metrics.allow_withdraw),
+        jsonBool(metrics.allow_deposit),
+        jsonBool(metrics.allow_craft)
+    )
+end
+
+local function readTextFile(path)
+    local f = io.open(path, "r")
+    if not f then return nil end
+    local content = f:read("*a")
+    f:close()
+    return content or ""
+end
+
+local function readHistoryLines()
+    if not filesystem.exists(HISTORY_PATH) then return {} end
+    local content = readTextFile(HISTORY_PATH)
+    if content == nil then
+        return nil, "не удалось прочитать " .. HISTORY_PATH
+    end
+    local lines = {}
+    for line in content:gmatch("[^\r\n]+") do
+        line = line:match("^%s*(.-)%s*$")
+        if line ~= "" then lines[#lines + 1] = line end
+    end
+    return lines
+end
+
+-- Атомарная запись: *.tmp -> rename. Если ФС не перезаписывает цель,
+-- используем remove + повторный rename; при неудаче восстанавливаем старый файл.
+local function safeSaveText(path, content)
+    local tmpPath = path .. ".tmp"
+    local oldContent = filesystem.exists(path) and readTextFile(path) or nil
+
+    local f = io.open(tmpPath, "w")
+    if not f then return false, "не удалось открыть " .. tmpPath end
+    local okWrite, writeErr = pcall(function() f:write(content) end)
+    f:close()
+    if not okWrite then
+        filesystem.remove(tmpPath)
+        return false, writeErr
+    end
+
+    local renamed, renameErr = filesystem.rename(tmpPath, path)
+    if not renamed then
+        if filesystem.exists(path) then filesystem.remove(path) end
+        renamed, renameErr = filesystem.rename(tmpPath, path)
+        if not renamed and oldContent ~= nil then
+            local restore = io.open(path, "w")
+            if restore then
+                pcall(function() restore:write(oldContent) end)
+                restore:close()
+            end
+        end
+    end
+
+    if not renamed then
+        filesystem.remove(tmpPath)
+        return false, renameErr or "не удалось переименовать " .. tmpPath
+    end
+    return true
+end
+
+local function appendHistory(line)
+    local lines, readErr = readHistoryLines()
+    if not lines then return false, readErr end
+
+    lines[#lines + 1] = line
+    if #lines > HISTORY_MAX_LINES then
+        local kept = {}
+        local start = #lines - HISTORY_KEEP_LINES + 1
+        for i = start, #lines do kept[#kept + 1] = lines[i] end
+        lines = kept
+    end
+
+    return safeSaveText(HISTORY_PATH, table.concat(lines, "\n") .. "\n")
+end
+
+if hasAppendArg() then
+    local okAppend, appendErr = pcall(function()
+        local metrics = collectMetrics()
+        local okWrite, writeErr = appendHistory(buildHistoryLine(metrics))
+        if not okWrite then
+            error("не удалось записать историю: " .. tostring(writeErr), 0)
+        end
+        print(string.format("healthcheck: history +1 (items=%d, cold=%d ms)",
+            metrics.items_count, metrics.cold_call_ms))
+    end)
+    if not okAppend then
+        print("healthcheck: ошибка — " .. tostring(appendErr))
+        error(appendErr, 0)
+    end
+    return
+end
 
 local okMain, mainErr = pcall(function()
     out("=== ME-Control Health Check ===")

@@ -205,6 +205,40 @@ local function showFileCheck()
     end
 end
 
+-- Сбор статистики при загрузке: healthcheck.lua --append.
+-- Мягкий тайм-бюджет: Lua не может прервать блокирующий вызов AE2, поэтому
+-- замеряем длительность и пишем предупреждение, если она превысила 5 с.
+local HEALTHCHECK_PATH = "/home/healthcheck.lua"
+local HEALTHCHECK_BUDGET = 5
+
+local function runHealthcheckOnBoot()
+    if config.healthcheckOnBoot == false then
+        log("healthcheck: выключен (healthcheckOnBoot=false)")
+        return
+    end
+    if not filesystem.exists(HEALTHCHECK_PATH) then
+        log("healthcheck: healthcheck.lua не найден — пропуск")
+        return
+    end
+
+    render("Сбор статистики...", nil)
+    local t0 = computer.uptime()
+    -- Важно: shell.execute(command, env, ...) — второй параметр это env, а не
+    -- аргумент программы. Аргумент передаём строкой команды.
+    local okCall, execOk, execErr = pcall(shell.execute, "healthcheck.lua --append")
+    local elapsed = computer.uptime() - t0
+
+    if not okCall then
+        log("healthcheck: ошибка — " .. tostring(execOk))
+    elseif execOk == false then
+        log("healthcheck: ошибка — " .. tostring(execErr))
+    elseif elapsed > HEALTHCHECK_BUDGET then
+        log(string.format("healthcheck: превышен тайм-бюджет %.1f с", elapsed))
+    else
+        log(string.format("healthcheck: история обновлена (%.1f с)", elapsed))
+    end
+end
+
 -- ===== 1. Splash =====
 render("Загрузка ME-CONTROL...", nil)
 
@@ -241,6 +275,7 @@ if type(updater.checkRemoteVersion) == "function" then
         os.sleep(1)
         showFileCheck()
         os.sleep(1)
+        runHealthcheckOnBoot()
         launch()
     end
 
