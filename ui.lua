@@ -118,6 +118,56 @@ function ui.drawTabs(W, currentTab, canModerate, isAdmin, canCraft)
     gpu.setForeground(C.fg)
 end
 
+-- ===== Индикатор глобальных запретов (allowUserWithdraw/Deposit/Craft = false) =====
+-- Рисуется в шапке сразу после версии; клик открывает расшифровку.
+ui.RESTRICTION_LABEL = "[!] Ограничения"
+
+function ui.getRestrictionsLayout(W)
+    local vtext = tostring(config.version or "") .. " | OC-Terminal"
+    local x = 3 + unicode.len(vtext) + 2
+    local w = unicode.len(ui.RESTRICTION_LABEL)
+    if x + w > W - 2 then return nil end
+    return { x = x, y = 1, w = w }
+end
+
+function ui.getRestrictionsModalLayout(W, H, count)
+    local mw = 46
+    local mh = 6 + math.max(1, count or 1)
+    local mx = math.floor((W - mw) / 2) + 1
+    local my = math.floor((H - mh) / 2) + 1
+    return {
+        mx = mx, my = my, mw = mw, mh = mh,
+        close = { x = mx + mw - 14, y = my + mh - 2, w = 12 },
+    }
+end
+
+-- list = { "Крафт отключён администратором", ... }
+function ui.drawRestrictions(W, H, list)
+    list = list or {}
+    local L = ui.getRestrictionsModalLayout(W, H, #list)
+    gpu.setBackground(C.overlay)
+    gpu.fill(1, 1, W, H, " ")
+    gpu.setBackground(C.modal)
+    gpu.fill(L.mx, L.my, L.mw, L.mh, " ")
+    ui.drawFrame(L.mx, L.my, L.mw, L.mh, C.warning)
+
+    gpu.setForeground(C.warning)
+    local title = " Глобальные ограничения "
+    gpu.set(L.mx + math.floor((L.mw - unicode.len(title)) / 2) + 1, L.my, title)
+
+    local maxLen = L.mw - 6
+    for i = 1, #list do
+        local line = "[!] " .. tostring(list[i])
+        if unicode.len(line) > maxLen then line = unicode.sub(line, 1, maxLen - 3) .. "..." end
+        gpu.setForeground(C.err)
+        gpu.set(L.mx + 2, L.my + 1 + i, line)
+    end
+
+    ui.drawButton(L.close.x, L.close.y, L.close.w, "ЗАКРЫТЬ", false, C.disabled)
+    gpu.setBackground(C.bg)
+    gpu.setForeground(C.fg)
+end
+
 -- ===== Плавающие уведомления (Toasts) =====
 local TOAST_COLORS = {
     ok   = { border = C.ok,      text = C.white, icon = "+" },
@@ -185,6 +235,15 @@ function ui.drawMain(W, H, state)
     -- Версия (слева на верхней рамке)
     gpu.setForeground(C.muted)
     gpu.set(3, 1, tostring(config.version or "") .. " | OC-Terminal")
+
+    -- Индикатор глобальных запретов: виден только когда есть ограничения
+    if state.globalRestrictions and #state.globalRestrictions > 0 then
+        local R = ui.getRestrictionsLayout(W)
+        if R then
+            gpu.setForeground(state.showRestrictions and C.white or C.warning)
+            gpu.set(R.x, R.y, ui.RESTRICTION_LABEL)
+        end
+    end
     
     -- Индикатор текущего пользователя (кто стоит на PIM)
     local who
@@ -453,11 +512,31 @@ function ui.drawAdminBan(W, H, targetName, opts)
     if unicode.len(title) > mw - 2 then title = unicode.sub(title, 1, mw - 5) .. "... " end
     gpu.set(mx + math.floor((mw - unicode.len(title)) / 2) + 1, my + 1, title)
 
-    -- Роль
+    -- Роль + быстрые кнопки «на уровень ниже / выше»
     gpu.setForeground(C.white)
     gpu.set(mx + 2, my + 2, "Роль:")
     gpu.setForeground(C.ok)
     gpu.set(mx + 9, my + 2, ui.roleLabel(role))
+    ui.drawButton(mx + 30, my + 2, 4, "-", false, C.limit)
+    ui.drawButton(mx + 36, my + 2, 4, "+", false, C.limit)
+
+    -- Статус бана
+    local ban = opts.ban or {}
+    gpu.setForeground(C.white)
+    gpu.set(mx + 2, my + 3, "Бан:")
+    if ban.banned then
+        gpu.setForeground(C.err)
+        local banLine = tostring(ban.reason or "без причины")
+        if tonumber(ban.expires) and tonumber(ban.expires) > 0 then
+            banLine = banLine .. " (до " .. formatLogTime(ban.expires) .. ")"
+        end
+        local room = mw - 10
+        if unicode.len(banLine) > room then banLine = unicode.sub(banLine, 1, room - 3) .. "..." end
+        gpu.set(mx + 9, my + 3, banLine)
+    else
+        gpu.setForeground(C.muted)
+        gpu.set(mx + 9, my + 3, "нет")
+    end
 
     -- Персональные права: три тумблера в одной строке
     gpu.setForeground(C.white)
@@ -541,6 +620,8 @@ function ui.getAdminBanLayout(W, H)
     local my = math.floor((H - mh) / 2) + 1
     return {
         mx = mx, my = my, mw = mw, mh = mh,
+        roleDown = { x = mx + 30, y = my + 2, w = 4 },
+        roleUp   = { x = mx + 36, y = my + 2, w = 4 },
         withdraw = { x = mx + 2,  y = my + 5, w = 18 },
         deposit  = { x = mx + 21, y = my + 5, w = 18 },
         craft    = { x = mx + 40, y = my + 5, w = 16 },
@@ -1447,10 +1528,16 @@ function ui.drawModal(W, H, item, qty, mode, canAction, isAdmin, reason)
     end
     ui.drawButton(mx + 2, my + mh - 2, 18, btnText, false, btnBg)
     
-    -- Подсказка под кнопкой действия, если действие недоступно
+    -- Красная пометка справа от кнопки действия, если действовать нельзя.
+    -- Рисуем в той же строке, чтобы не затирать нижнюю рамку окна.
     if not canAction and reason then
-        gpu.setForeground(C.warning)
-        gpu.set(mx + 2, my + mh - 1, string.sub(reason, 1, mw - 4))
+        local hint = tostring(reason)
+        local room = mw - 24
+        if room > 0 then
+            if unicode.len(hint) > room then hint = unicode.sub(hint, 1, room - 3) .. "..." end
+            gpu.setForeground(C.err)
+            gpu.set(mx + 21, my + mh - 2, hint)
+        end
     end
     
     -- Кнопка лимита (только для админа, над «ЗАКРЫТЬ»; для крафта не нужна)

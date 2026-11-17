@@ -65,6 +65,8 @@ local state = {
     banInfo = nil,
     canCraftTab = false,    -- роль >= user: видна ли вкладка «Крафт»
     canCraftAction = false, -- роль + глобальный флаг: можно ли заказывать
+    globalRestrictions = {}, -- расшифровки сработавших глобальных запретов
+    showRestrictions = false,
     adminTarget = nil,
     isTechAdmin = false,
     banReasonText = "",
@@ -345,6 +347,23 @@ local function updateList(force)
     end
 end
 
+-- Собирает расшифровки глобальных запретов (allowUser* == false).
+-- Пустой список = ограничений нет, индикатор в шапке не рисуется.
+local function collectGlobalRestrictions()
+    local list = {}
+    local cfg = db.getConfig() or {}
+    if cfg.allowUserWithdraw == false then
+        list[#list + 1] = "Забор предметов запрещён"
+    end
+    if cfg.allowUserDeposit == false then
+        list[#list + 1] = "Сдача предметов запрещена"
+    end
+    if cfg.allowUserCraft == false then
+        list[#list + 1] = "Крафт отключён администратором"
+    end
+    return list
+end
+
 local function drawScreen()
     if state.isBanned then
         ui.drawBannedScreen(W, H, state.banInfo)
@@ -353,6 +372,8 @@ local function drawScreen()
     local level = state.player and db.getRoleLevel(state.player) or config.LEVEL_BANNED
     state.canCraftTab = level >= config.LEVEL_USER
     state.canCraftAction = state.canCraftTab and api.canCraft(state.player)
+    state.globalRestrictions = collectGlobalRestrictions()
+    if #state.globalRestrictions == 0 then state.showRestrictions = false end
     if state.currentTab == "CRAFT" and not state.canCraftTab then
         state.currentTab = "DASH"
         state.selectedItem = nil
@@ -363,6 +384,7 @@ local function drawScreen()
     -- Окно управления игроком (роль / права / статистика) поверх админки
     if state.currentTab == "ADMIN" and state.adminTarget then
         local pd = db.getPlayer(state.adminTarget)
+        local banned, banInfo = db.checkBan(state.adminTarget)
         ui.drawAdminBan(W, H, state.adminTarget, {
             text = state.banReasonText or "",
             role = pd and pd.role or "?",
@@ -370,6 +392,11 @@ local function drawScreen()
                 canWithdraw = pd and pd.canWithdraw ~= false,
                 canDeposit  = pd and pd.canDeposit ~= false,
                 canCraft    = pd and pd.canCraft ~= false,
+            },
+            ban = {
+                banned = banned or (pd and pd.role == "banned") or false,
+                reason = (banInfo and banInfo.reason) or (pd and pd.banReason) or "",
+                expires = (banInfo and banInfo.expires) or (pd and pd.banExpires) or 0,
             },
             totalActions = pd and pd.totalActions or 0,
             lastSeen = pd and pd.lastSeen or 0,
@@ -384,12 +411,19 @@ local function drawScreen()
             or (state.currentTab == "ME" and api.canWithdraw(state.player))
             or (state.currentTab == "INV" and api.canDeposit(state.player))
         local reason
-        if isCraft and not canAct then reason = "Крафт отключён администратором" end
+        if isCraft and not canAct then
+            -- Роль есть, значит действовать мешает глобальный флаг.
+            reason = state.canCraftTab and "Глобальный запрет" or "Крафт доступен с роли user"
+        end
         ui.drawModal(W, H, state.selectedItem, state.quantity or 1, state.currentTab,
             canAct and true or false, state.isAdmin, reason)
     end
     -- Плавающие уведомления поверх всего
     ui.drawToasts(W, H, state.notifications)
+    -- Расшифровка глобальных запретов — самый верхний слой
+    if state.showRestrictions then
+        ui.drawRestrictions(W, H, state.globalRestrictions)
+    end
     -- После отрисовки основного экрана принудительно рисуем статус, чтобы он не исчез
     gpu.setBackground(config.colors.bg)
     gpu.fill(1, H - 1, W, 1, " ")
@@ -409,6 +443,29 @@ end
 local function canCraftRole(playerName)
     if not playerName then return false end
     return (db.getRoleLevel(playerName) or config.LEVEL_BANNED) >= config.LEVEL_USER
+end
+
+-- Меняет роль цели на один уровень вверх/вниз (step = +1 / -1).
+-- Возвращает ok, newRole|err. Иерархию проверяет db.setRole.
+local function changeRoleByStep(targetName, step)
+    local pd = db.getPlayer(targetName)
+    if not pd then return false, "Игрок не найден" end
+
+    local curLevel = db.ROLE_LEVELS[pd.role] or 0
+    local newLevel = curLevel + step
+    if newLevel < config.LEVEL_GUEST then
+        return false, "Ниже guest нельзя (используйте ЗАБАНИТЬ)"
+    end
+
+    local newRole
+    for role, lvl in pairs(db.ROLE_LEVELS) do
+        if lvl == newLevel then newRole = role; break end
+    end
+    if not newRole then return false, "Нет такой роли" end
+
+    local ok, err = db.setRole(state.player, targetName, newRole)
+    if not ok then return false, tostring(err or "Не удалось изменить роль") end
+    return true, newRole
 end
 
 local function switchTab(tabId)
@@ -858,9 +915,27 @@ while true do
             end
         end
         
+        -- Клик по индикатору ограничений в шапке (работает и без игрока на PIM)
+        local restrictionsRect = (#state.globalRestrictions > 0) and ui.getRestrictionsLayout(W) or nil
+        local onRestrictions = restrictionsRect ~= nil
+            and y == restrictionsRect.y
+            and x >= restrictionsRect.x and x < restrictionsRect.x + restrictionsRect.w
+
         -- Забанен — все действия заблокированы (кроме ВЫХОД, обработанного выше)
         if state.isBanned then
             -- ничего не делаем
+        elseif state.showRestrictions then
+            -- Открыта расшифровка глобальных запретов: закрываем по кнопке или клику вне окна
+            local L = ui.getRestrictionsModalLayout(W, H, #state.globalRestrictions)
+            local onClose = x >= L.close.x and x < L.close.x + L.close.w and y == L.close.y
+            local inside = x >= L.mx and x < L.mx + L.mw and y >= L.my and y < L.my + L.mh
+            if onClose or not inside then
+                state.showRestrictions = false
+                requestRedraw()
+            end
+        elseif onRestrictions then
+            state.showRestrictions = true
+            requestRedraw()
         elseif state.currentPlayer == nil then
             setStatus("Нет активного пользователя (встаньте на PIM)", "err")
         elseif clickPlayer ~= state.currentPlayer then
@@ -869,7 +944,7 @@ while true do
             -- Любой клик выходит из режима поиска (кнопки ПОИСК ниже включат его снова)
             state.isSearching = false
             state.isLogSearching = false
-        
+
         -- Переключение вкладок
         if y == 2 then
             local layout = ui.getTabLayout(W, state.canModerate, state.isAdmin, state.canCraftTab)
@@ -1059,6 +1134,24 @@ while true do
                     end
                     updateList(); requestRedraw()
 
+                elseif inRect(L.roleDown) then
+                    local okR, res = changeRoleByStep(state.adminTarget, -1)
+                    if okR then
+                        notify("Роль игрока " .. state.adminTarget .. ": " .. ui.roleLabel(res))
+                    else
+                        notify(tostring(res), "err")
+                    end
+                    updateList(); requestRedraw()
+
+                elseif inRect(L.roleUp) then
+                    local okR, res = changeRoleByStep(state.adminTarget, 1)
+                    if okR then
+                        notify("Роль игрока " .. state.adminTarget .. ": " .. ui.roleLabel(res))
+                    else
+                        notify(tostring(res), "err")
+                    end
+                    updateList(); requestRedraw()
+
                 elseif inRect(L.ban) then
                     local reason = state.banReasonText
                     if reason == "" then reason = "Без причины" end
@@ -1157,7 +1250,7 @@ while true do
                     -- Роль перечитываем перед каждым заказом: вкладка могла остаться
                     -- открытой после понижения роли / отключения крафта.
                     state.canCraftTab = canCraftRole(state.player)
-        state.canCraftAction = state.canCraftTab and api.canCraft(state.player)
+                    state.canCraftAction = state.canCraftTab and api.canCraft(state.player)
                     if not state.canCraftTab then
                         notify("Крафт доступен с роли user", "err")
                         state.selectedItem = nil
