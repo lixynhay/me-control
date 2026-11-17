@@ -421,9 +421,16 @@ function db.getThresholds()
     return data.thresholds
 end
 
--- Установить лимит предмета: itemName -> {label, min}; minAmount == 0 удаляет лимит.
+-- Лимит конкретного предмета (или nil, если не настроен).
+function db.getThreshold(itemName)
+    if not data or not data.thresholds or not itemName then return nil end
+    return data.thresholds[itemName]
+end
+
+-- Установить лимит предмета: itemName -> {label, min, autoCraft}; minAmount == 0 удаляет лимит.
 -- actorName == nil — системный вызов (автокрафт), проверка прав пропускается.
-function db.setThreshold(actorName, itemName, itemLabel, minAmount)
+-- autoCraft: nil — не менять текущее значение (совместимость со старыми вызовами).
+function db.setThreshold(actorName, itemName, itemLabel, minAmount, autoCraft)
     if actorName ~= nil then
         local actor = db.getPlayer(actorName)
         local level = actor and (db.ROLE_LEVELS[actor.role] or 0) or 0
@@ -437,7 +444,19 @@ function db.setThreshold(actorName, itemName, itemLabel, minAmount)
     if minAmount == 0 then
         data.thresholds[itemName] = nil
     else
-        data.thresholds[itemName] = { label = itemLabel or itemName, min = minAmount }
+        local prev = data.thresholds[itemName]
+        local enabled
+        if autoCraft == nil then
+            -- Старые записи без флага ведут себя как «автокрафт включён».
+            enabled = (prev == nil) or (prev.autoCraft ~= false)
+        else
+            enabled = (autoCraft == true)
+        end
+        data.thresholds[itemName] = {
+            label = itemLabel or (prev and prev.label) or itemName,
+            min = minAmount,
+            autoCraft = enabled,
+        }
     end
     db.save()
     return true

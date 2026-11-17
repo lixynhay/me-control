@@ -949,12 +949,25 @@ function api.getThresholdStatus()
             label = th.label or name,
             current = current,
             min = minAmount,
+            -- Записи без флага (старые БД) считаются включёнными.
+            autoCraft = th.autoCraft ~= false,
             isOk = current >= minAmount
         })
     end
     
     table.sort(list, function(a, b) return a.label < b.label end)
     return list
+end
+
+-- Сколько предметов реально участвует в автокрафте: лимит задан и флаг включён.
+function api.countActiveAutoCrafts()
+    local n = 0
+    for _, th in pairs(db.getThresholds()) do
+        if th.autoCraft ~= false and (tonumber(th.min) or 0) > 0 then
+            n = n + 1
+        end
+    end
+    return n
 end
 
 -- Сдать весь инвентарь игрока в МЭ через pim.pushItem

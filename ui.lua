@@ -360,29 +360,46 @@ function ui.drawMain(W, H, state)
         local maxL = lineW - countW - 2
         if maxL < 8 then maxL = 8 end
 
+        -- Маркеры настроек: [A] — автокрафт включён, [L] — лимит без автокрафта
+        local thresholds = state.thresholds or {}
+
         for i = startIdx, endIdx do
             local rowY = 5 + (i - startIdx)
             gpu.setBackground((i % 2 == 0) and C.bg or C.row_alt)
             gpu.fill(3, rowY, W - 5, 1, " ")
 
-            local dLabel = api.cleanLabel(tostring(state.items[i].display or state.items[i].label or "?"))
+            local item = state.items[i]
+            local dLabel = api.cleanLabel(tostring(item.display or item.label or "?"))
             local icon, iconColor = ui.getItemIcon(dLabel)
             local prefix = icon and (icon .. " ") or "  "
 
-            if unicode.len(dLabel) > maxL then dLabel = unicode.sub(dLabel, 1, maxL - 3) .. "..." end
-            local pad = maxL - unicode.len(dLabel)
+            local th = item.name and thresholds[item.name] or nil
+            local marker = ""
+            if th then
+                marker = (th.autoCraft ~= false) and "[A] " or "[L] "
+            end
+
+            local labelRoom = maxL - unicode.len(marker)
+            if labelRoom < 4 then labelRoom = 4 end
+            if unicode.len(dLabel) > labelRoom then dLabel = unicode.sub(dLabel, 1, labelRoom - 3) .. "..." end
+            local pad = labelRoom - unicode.len(dLabel)
             if pad < 0 then pad = 0 end
 
             -- Название, отступ и количество рисуются одной строкой с одного X
             gpu.setForeground(C.fg)
-            gpu.set(textX, rowY, prefix .. dLabel .. string.rep(" ", pad) ..
-                " | " .. string.format("%8d", math.floor(state.items[i].size or 0)))
+            gpu.set(textX, rowY, prefix .. marker .. dLabel .. string.rep(" ", pad) ..
+                " | " .. string.format("%8d", math.floor(item.size or 0)))
 
             -- Перекрашиваем только сам символ иконки: позиция уже занята
             -- в строке, поэтому ничего не сдвигается и не налезает на рамку
             if icon then
                 gpu.setForeground(iconColor)
                 gpu.set(textX, rowY, icon)
+            end
+            -- Маркер подсвечиваем: [A] — зелёный, [L] — приглушённый
+            if marker ~= "" then
+                gpu.setForeground(th.autoCraft ~= false and C.ok or C.muted)
+                gpu.set(textX + unicode.len(prefix), rowY, marker)
             end
         end
         gpu.setBackground(C.bg)
@@ -700,11 +717,12 @@ function ui.getItemInfoLayout(W, H)
     local my = math.floor((H - mh) / 2) + 1
     return {
         mx = mx, my = my, mw = mw, mh = mh,
+        limit = { x = mx + 2, y = my + mh - 2, w = 20 },
         close = { x = mx + mw - 14, y = my + mh - 2, w = 12 },
     }
 end
 
-function ui.drawItemInfo(W, H, item)
+function ui.drawItemInfo(W, H, item, isAdmin)
     item = item or {}
     local L = ui.getItemInfoLayout(W, H)
 
@@ -748,6 +766,85 @@ function ui.drawItemInfo(W, H, item)
         row(L.my + 5, "NBT:", "Без NBT", C.muted)
     end
 
+    if isAdmin then
+        ui.drawButton(L.limit.x, L.limit.y, L.limit.w, "Настроить лимит", false, C.limit)
+    end
+    ui.drawButton(L.close.x, L.close.y, L.close.w, "ЗАКРЫТЬ", false, C.disabled)
+    gpu.setBackground(C.bg)
+    gpu.setForeground(C.fg)
+end
+
+-- ===== Модалка «Лимит и Автокрафт» (admin+) =====
+-- opts = { current = <запас в сети>, min = <минимум>, autoCraft = true/false, label = "..." }
+function ui.getLimitModalLayout(W, H)
+    local mw, mh = 52, 14
+    local mx = math.floor((W - mw) / 2) + 1
+    local my = math.floor((H - mh) / 2) + 1
+    return {
+        mx = mx, my = my, mw = mw, mh = mh,
+        minus10 = { x = mx + 2,  y = my + 8, w = 6 },
+        minus1  = { x = mx + 9,  y = my + 8, w = 6 },
+        plus1   = { x = mx + 29, y = my + 8, w = 6 },
+        plus10  = { x = mx + 36, y = my + 8, w = 6 },
+        toggle  = { x = mx + 2,  y = my + 10, w = 22 },
+        save    = { x = mx + 2,  y = my + mh - 2, w = 14 },
+        close   = { x = mx + mw - 14, y = my + mh - 2, w = 12 },
+    }
+end
+
+function ui.drawLimitModal(W, H, itemName, opts)
+    opts = opts or {}
+    local L = ui.getLimitModalLayout(W, H)
+    local minAmount = math.floor(tonumber(opts.min) or 0)
+    local autoCraft = opts.autoCraft ~= false
+
+    gpu.setBackground(C.overlay)
+    gpu.fill(1, 1, W, H, " ")
+    gpu.setBackground(C.modal)
+    gpu.fill(L.mx, L.my, L.mw, L.mh, " ")
+    ui.drawFrame(L.mx, L.my, L.mw, L.mh, C.title)
+
+    gpu.setForeground(C.title)
+    local title = " Лимит и Автокрафт "
+    gpu.set(L.mx + math.floor((L.mw - unicode.len(title)) / 2) + 1, L.my, title)
+
+    local maxLen = L.mw - 6
+    local function clip(text)
+        local t = tostring(text)
+        if unicode.len(t) > maxLen then t = unicode.sub(t, 1, maxLen - 3) .. "..." end
+        return t
+    end
+
+    gpu.setForeground(C.white)
+    gpu.set(L.mx + 2, L.my + 2, "Предмет:")
+    gpu.setForeground(C.fg)
+    gpu.set(L.mx + 12, L.my + 2, clip(api.cleanLabel(tostring(opts.label or itemName or "?"))))
+
+    gpu.setForeground(C.white)
+    gpu.set(L.mx + 2, L.my + 3, "В сети:")
+    gpu.setForeground(C.ok)
+    gpu.set(L.mx + 12, L.my + 3, tostring(math.floor(tonumber(opts.current) or 0)))
+
+    gpu.setForeground(C.white)
+    gpu.set(L.mx + 2, L.my + 5, "Минимум:")
+    gpu.setForeground(minAmount > 0 and C.admin or C.muted)
+    gpu.set(L.mx + 12, L.my + 5, tostring(minAmount))
+
+    gpu.setForeground(C.muted)
+    gpu.set(L.mx + 2, L.my + 6, "0 — лимит снять")
+
+    -- Кнопки количества (как в крафте)
+    ui.drawButton(L.minus10.x, L.minus10.y, L.minus10.w, "-10", false)
+    ui.drawButton(L.minus1.x,  L.minus1.y,  L.minus1.w,  "-1",  false)
+    ui.drawButton(L.plus1.x,   L.plus1.y,   L.plus1.w,   "+1",  false)
+    ui.drawButton(L.plus10.x,  L.plus10.y,  L.plus10.w,  "+10", false)
+
+    -- Тумблер автокрафта
+    ui.drawButton(L.toggle.x, L.toggle.y, L.toggle.w,
+        "Автокрафт:" .. (autoCraft and "ВКЛ" or "ВЫКЛ"), false,
+        autoCraft and C.ok or C.disabled)
+
+    ui.drawButton(L.save.x, L.save.y, L.save.w, "СОХРАНИТЬ", false, C.ok)
     ui.drawButton(L.close.x, L.close.y, L.close.w, "ЗАКРЫТЬ", false, C.disabled)
     gpu.setBackground(C.bg)
     gpu.setForeground(C.fg)
@@ -1161,171 +1258,6 @@ local function formatUptime(sec)
     return string.format("%02d:%02d:%02d", h, m, s)
 end
 
-function ui.drawStats(W, H, info, storage, history)
-    info = info or {}
-    storage = storage or info.storage
-    history = history or info.energyHistory
-
-    -- Рамка чуть ниже обычной: нижняя строка (H-4) остаётся под время работы
-    ui.drawFrame(2, 4, W - 3, H - 9, C.border)
-    -- Заливаем внутреннюю область, чтобы убрать старый вывод
-    gpu.setBackground(C.bg)
-    gpu.fill(3, 5, W - 5, H - 11, " ")
-
-    gpu.setForeground(C.title)
-    local title = "--- Статистика МЭ-сети ---"
-    gpu.set(math.floor((W - unicode.len(title)) / 2) + 1, 4, title)
-
-    -- Внутри рамки доступны строки 5 .. H-7
-    local lastRow = H - 7
-    local y = 5
-
-    gpu.setForeground(C.white)
-    gpu.set(5, y, "Предметов:")
-    gpu.setForeground(C.ok)
-    gpu.set(16, y, tostring(info.totalItems or 0))
-    gpu.setForeground(C.white)
-    gpu.set(30, y, "Типов:")
-    gpu.setForeground(C.ok)
-    gpu.set(38, y, tostring(info.totalTypes or 0))
-    y = y + 1
-
-    if info.energyStored ~= nil and info.energyMax and info.energyMax > 0 then
-        local pct = percentOf(info.energyStored, info.energyMax)
-
-        gpu.setForeground(C.white)
-        gpu.set(5, y, "Энергия:")
-        gpu.setForeground(C.ok)
-        gpu.set(25, y, string.format("%d / %d AE (%d%%)",
-            math.floor(info.energyStored), math.floor(info.energyMax), pct))
-        y = y + 1
-
-        -- Полоса заполнения [████░░░░] — цельная, ровно ENERGY_BAR_WIDTH символов внутри.
-        -- График рисуется СТРОГО на следующей строке (barY + 1), а не внутри полосы.
-        local barY = y
-        gpu.setForeground(pct >= 20 and C.ok or C.danger)
-        gpu.set(ENERGY_BAR_X, barY, progressBar(pct, ENERGY_BAR_WIDTH))
-        y = y + 1
-
-        -- График истории (▁▂▃▄▅▆▇█) — строго ПОД полосой. Если истории нет,
-        -- drawEnergyGraph только очищает строку и ничего не рисует.
-        local graphY = barY + 1
-        if graphY <= lastRow then
-            gpu.setForeground(C.ok)
-            local usedBarWidth = ENERGY_BAR_WIDTH + 2   -- полоса + скобки "[ ]"
-            drawEnergyGraph(ENERGY_BAR_X, graphY, usedBarWidth, history)
-            y = graphY + 1
-        end
-    end
-
-    -- Приход / расход энергии (AE/t)
-    if info.avgPowerInjection ~= nil or info.avgPowerUsage ~= nil then
-        local injection = tonumber(info.avgPowerInjection) or 0
-        local usage = tonumber(info.avgPowerUsage) or 0
-        local deficit = usage > injection
-
-        if y <= lastRow then
-            gpu.setForeground(C.white)
-            gpu.set(5, y, "Приход:")
-            gpu.setForeground(C.ok)
-            gpu.set(13, y, string.format("+%.0f AE/t", injection))
-
-            gpu.setForeground(C.white)
-            gpu.set(27, y, "Расход:")
-            gpu.setForeground(C.danger)
-            gpu.set(35, y, string.format("-%.0f AE/t", usage))
-            y = y + 1
-        end
-
-        if deficit and y <= lastRow then
-            gpu.setForeground(C.danger)
-            gpu.set(5, y, "[!] Дефицит энергии!")
-            y = y + 1
-        end
-    end
-
-    -- Диски: объём в байтах и количество типов
-    if storage then
-        local usedBytes  = tonumber(storage.usedBytes) or 0
-        local totalBytes = tonumber(storage.totalBytes)
-        local usedTypes  = tonumber(storage.usedTypes) or 0
-        local totalTypes = tonumber(storage.totalTypes)
-
-        if y <= lastRow then
-            gpu.setForeground(C.white)
-            gpu.set(5, y, "Диски (Байты):")
-        end
-
-        if totalBytes and totalBytes > 0 and storage.estimated ~= true then
-            local pct = percentOf(usedBytes, totalBytes)
-            local color = C.ok
-            if pct > 95 then
-                color = C.danger
-            elseif pct >= 80 then
-                color = C.admin -- жёлтый/янтарный
-            end
-            if y + 1 <= lastRow then
-                gpu.setForeground(color)
-                gpu.set(5, y + 1, progressBar(pct, 20) .. " " .. tostring(pct) .. "%  " ..
-                    formatSize(usedBytes) .. " / " .. formatSize(totalBytes))
-            end
-        else
-            if y + 1 <= lastRow then
-                gpu.setForeground(C.muted)
-                gpu.set(5, y + 1, formatSize(usedBytes) .. " (оценка занятого)")
-            end
-        end
-        y = y + 2
-
-        if y <= lastRow then
-            gpu.setForeground(C.white)
-            gpu.set(5, y, "Диски (Типы):")
-            gpu.setForeground(C.ok)
-            local typesText = tostring(usedTypes)
-            if totalTypes and totalTypes > 0 then
-                typesText = typesText .. " / " .. tostring(totalTypes)
-            end
-            gpu.set(25, y, typesText)
-        end
-        y = y + 1
-    end
-
-    -- Крафт-процессоры
-    local crafting = info.crafting
-    if crafting and crafting.totalCpus and crafting.totalCpus > 0 then
-        if y <= lastRow then
-            gpu.setForeground(C.white)
-            gpu.set(5, y, "Крафт-процессоры:")
-            local busy = tonumber(crafting.busyCpus) or 0
-            local total = tonumber(crafting.totalCpus) or 0
-            gpu.setForeground(busy > 0 and C.admin or C.ok)
-            gpu.set(25, y, tostring(busy) .. " / " .. tostring(total))
-        end
-        y = y + 1
-    end
-
-    if info.cpus then
-        if y <= lastRow then
-            gpu.setForeground(C.white)
-            gpu.set(5, y, "Сопроцессоров:")
-            gpu.setForeground(C.ok)
-            gpu.set(25, y, tostring(info.cpus))
-        end
-        y = y + 1
-    end
-
-    gpu.setForeground(C.muted)
-    gpu.set(5, lastRow, "Автообновление включено (каждые 2 сек)")
-
-    -- Время работы компьютера — в самом низу
-    local okUp, up = pcall(computer.uptime)
-    local upText = "Время работы ПК: " .. formatUptime(okUp and up or 0)
-    gpu.setForeground(C.title)
-    gpu.fill(3, H - 4, W - 4, 1, " ")
-    gpu.set(5, H - 4, upText)
-    gpu.setForeground(C.fg)
-end
-
 -- ===== Системная панель (admin+): метрики ПК и история healthcheck =====
 
 -- Секунды -> ЧЧ:ММ (компактный uptime для системной секции)
@@ -1464,6 +1396,10 @@ function ui.drawSystemPanel(W, H, state, top)
     else
         line("МЭ-сеть:", "Предметов " .. tostring(info.totalItems or 0) .. " | API н/д", C.muted)
     end
+
+    -- Активные автокрафты (лимит задан и флаг включён)
+    local active = tonumber(sys.activeAutoCrafts) or 0
+    line("Автокрафт:", tostring(active) .. " активных", active > 0 and C.ok or C.muted)
 
     -- Глобальные флаги: выключенные подсвечиваем красным
     local cfg = sys.config or {}

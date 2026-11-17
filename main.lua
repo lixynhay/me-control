@@ -77,6 +77,11 @@ local state = {
     historyEntries = {},
     showItemInfo = false,     -- открыты детали предмета (Raw ID / NBT)
     itemInfo = nil,
+    showLimitModal = false,   -- открыта настройка лимита/автокрафта (admin+)
+    limitItem = nil,
+    limitMin = 0,
+    limitAutoCraft = true,
+    thresholds = {},          -- лимиты/автокрафт по предметам (для маркеров [A]/[L])
     adminTarget = nil,
     isTechAdmin = false,
     banReasonText = "",
@@ -203,7 +208,8 @@ local function runAutoCraft()
     local sent = false
 
     for _, item in ipairs(status) do
-        if item and item.isOk == false then
+        -- autoCraft == false — лимит есть, но автокрафт для предмета выключен
+        if item and item.isOk == false and item.autoCraft ~= false then
             local craftable = findCraftableByName(item.name)
             if craftable then
                 local last = tonumber(state.lastAutoCrafts[item.name]) or -math.huge
@@ -329,6 +335,7 @@ local function collectSystemInfo(apiMs)
         memFreeKb = nil,
         memTotalKb = nil,
         apiMs = apiMs,
+        activeAutoCrafts = 0,
         config = db.getConfig() or {},
     }
     local okUp, up = pcall(computer.uptime)
@@ -337,12 +344,16 @@ local function collectSystemInfo(apiMs)
         sys.memTotalKb = tonumber(computer.totalMemory())
         sys.memFreeKb = tonumber(computer.freeMemory())
     end)
+    local okCount, count = pcall(api.countActiveAutoCrafts)
+    if okCount then sys.activeAutoCrafts = tonumber(count) or 0 end
     return sys
 end
 
 local function updateList(force)
     -- force=true — принудительно обновить TTL-кэш предметов МЭ
     if force then api.getNetworkItems(true) end
+    -- Лимиты нужны для маркеров [A]/[L] в списках предметов
+    state.thresholds = db.getThresholds() or {}
     if state.currentTab == "DASH" then
         -- «Главная»: сводка по сети + журнал. Статистика AE2 и системные
         -- метрики добавляются только соответствующим ролям.
@@ -502,9 +513,18 @@ local function drawScreen()
     if state.showHistory then
         ui.drawPlayerHistory(W, H, state.player or state.currentPlayer, state.historyEntries)
     end
-    -- Детали предмета (Raw ID / Damage / NBT)
+    -- Детали предмета (Raw ID / Damage / NBT) + «Настроить лимит» для admin+
     if state.showItemInfo and state.itemInfo then
-        ui.drawItemInfo(W, H, state.itemInfo)
+        ui.drawItemInfo(W, H, state.itemInfo, state.isAdmin)
+    end
+    -- Лимит и автокрафт предмета (admin+)
+    if state.showLimitModal and state.limitItem then
+        ui.drawLimitModal(W, H, state.limitItem.name, {
+            label = state.limitItem.display or state.limitItem.label,
+            current = state.limitItem.size,
+            min = state.limitMin,
+            autoCraft = state.limitAutoCraft,
+        })
     end
     -- Расшифровка глобальных запретов — самый верхний слой
     if state.showRestrictions then
@@ -1033,12 +1053,64 @@ while true do
                 state.showHistory = false
                 requestRedraw()
             end
+        elseif state.showLimitModal and state.limitItem then
+            -- Настройка лимита/автокрафта: самый верхний слой над «Деталями»
+            local L = ui.getLimitModalLayout(W, H)
+            local function hit(r) return x >= r.x and x < r.x + r.w and y == r.y end
+
+            if hit(L.minus10) then
+                state.limitMin = math.max(0, state.limitMin - 10)
+                requestRedraw()
+            elseif hit(L.minus1) then
+                state.limitMin = math.max(0, state.limitMin - 1)
+                requestRedraw()
+            elseif hit(L.plus1) then
+                state.limitMin = state.limitMin + 1
+                requestRedraw()
+            elseif hit(L.plus10) then
+                state.limitMin = state.limitMin + 10
+                requestRedraw()
+            elseif hit(L.toggle) then
+                state.limitAutoCraft = not state.limitAutoCraft
+                requestRedraw()
+            elseif hit(L.save) then
+                local item = state.limitItem
+                local okSave, saveErr = db.setThreshold(state.player, item.name,
+                    item.display or item.label, state.limitMin, state.limitAutoCraft)
+                if okSave then
+                    notify("Лимит сохранён: " .. tostring(item.display or item.label) ..
+                        " — минимум " .. tostring(state.limitMin) ..
+                        (state.limitAutoCraft and ", автокрафт ВКЛ" or ", автокрафт ВЫКЛ"))
+                    state.showLimitModal = false
+                    state.limitItem = nil
+                else
+                    notify(tostring(saveErr or "Не удалось сохранить лимит"), "err")
+                end
+                updateList(); requestRedraw()
+            else
+                local onClose = hit(L.close)
+                local inside = x >= L.mx and x < L.mx + L.mw and y >= L.my and y < L.my + L.mh
+                if onClose or not inside then
+                    state.showLimitModal = false
+                    state.limitItem = nil
+                    requestRedraw()
+                end
+            end
         elseif state.showItemInfo then
-            -- Детали предмета: закрытие по кнопке или клику вне окна
+            -- Детали предмета: кнопка лимита (admin+) либо закрытие
             local L = ui.getItemInfoLayout(W, H)
             local onClose = x >= L.close.x and x < L.close.x + L.close.w and y == L.close.y
+            local onLimit = state.isAdmin and L.limit
+                and x >= L.limit.x and x < L.limit.x + L.limit.w and y == L.limit.y
             local inside = x >= L.mx and x < L.mx + L.mw and y >= L.my and y < L.my + L.mh
-            if onClose or not inside then
+            if onLimit then
+                local th = db.getThreshold(state.itemInfo.name) or {}
+                state.limitItem = state.itemInfo
+                state.limitMin = math.floor(tonumber(th.min) or 0)
+                state.limitAutoCraft = th.autoCraft ~= false
+                state.showLimitModal = true
+                requestRedraw()
+            elseif onClose or not inside then
                 state.showItemInfo = false
                 state.itemInfo = nil
                 requestRedraw()
