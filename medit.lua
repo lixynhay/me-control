@@ -6,12 +6,19 @@
 --   Ctrl+S (код 31)  — сохранить файл в текущую директорию
 --   Ctrl+Q (код 16)  — выйти (с предупреждением, если есть несохранённые правки)
 --   Ctrl+F (код 33)  — поиск по тексту (Enter — найти, Esc — отмена)
+--   Ctrl+Z (код 44)  — отменить последнее действие (Undo)
+--   Ctrl+Y (код 21)  — повторить отменённое действие (Redo)
+--   Ctrl+G (код 34)  — переход к строке (Enter — перейти, Esc — отмена)
 --   Esc              — то же, что Ctrl+Q
 --
--- Навигация: стрелки, PageUp/PageDown, Home/End.
--- Мышь: колесо (scroll) прокручивает текст и удерживает курсор в видимой зоне.
--- Ввод: обычные символы и цифры, Enter — новая строка, Backspace — удаление
--- (с поддержкой UTF-8, включая кириллицу, через библиотеку unicode).
+-- Навигация: стрелки, PageUp/PageDown, Home/End, клик мышью по тексту.
+-- Мышь: колесо (scroll) прокручивает текст; клик ставит курсор в позицию.
+-- Ввод: обычные символы и цифры, Enter — новая строка с умным отступом,
+-- Backspace — удаление (с поддержкой UTF-8, включая кириллицу).
+--
+-- Undo/Redo: история до 50 действий; новое действие очищает Redo.
+-- Умный отступ: после then/do/function/{/(/repeat Enter добавляет 4 пробела,
+-- а при вводе end/else/elseif/}/)/until отступ автоматически убирается.
 --
 -- Перерисовка ограничена по частоте (throttling): не чаще одного кадра
 -- в 0.05 секунды — при зажатой клавише видеокарта не перегружается.
@@ -70,6 +77,14 @@ local searching = false     -- открыто поле поиска
 local searchQuery = ""      -- вводимый запрос
 local searchMatch = nil     -- { line, col, len } — найденное слово (для подсветки)
 
+-- Undo / Redo: снимки состояния до каждого изменения текста.
+local undoStack, redoStack = {}, {}
+local UNDO_LIMIT = 50
+
+-- Переход к строке (Ctrl+G)
+local gotoMode = false
+local gotoQuery = ""
+
 -- ===== Утилиты UTF-8 =====
 local function ulen(s) return unicode.len(s or "") end
 local function usub(s, i, j) return unicode.sub(s or "", i, j) end
@@ -112,6 +127,9 @@ local function loadFile()
     cy, cx = 1, 0
     topLine, leftCol = 1, 0
     dirty = false
+    undoStack, redoStack = {}, {}
+    gotoMode, gotoQuery = false, ""
+    searchMatch = nil
 end
 
 local function saveFile()
@@ -136,7 +154,94 @@ local function clampCursor()
     if cx > n then cx = n end
 end
 
+-- ===== Undo / Redo =====
+-- Снимок состояния: копия массива строк + позиция курсора. Строки в Lua
+-- неизменяемы, поэтому копии массива достаточно (глубокая копия не нужна).
+local function snapshot()
+    local copy = {}
+    for i = 1, #lines do copy[i] = lines[i] end
+    return { lines = copy, cy = cy, cx = cx }
+end
+
+-- Сохраняет состояние перед изменением текста. Новое действие сбрасывает Redo.
+local function pushUndo()
+    undoStack[#undoStack + 1] = snapshot()
+    if #undoStack > UNDO_LIMIT then table.remove(undoStack, 1) end
+    redoStack = {}
+end
+
+local function restoreSnapshot(s)
+    if not s then return end
+    local copy = {}
+    for i = 1, #s.lines do copy[i] = s.lines[i] end
+    lines = copy
+    cy, cx = s.cy or 1, s.cx or 0
+    clampCursor()          -- курсор в пределах длины строки
+    dirty = true
+    searchMatch = nil
+end
+
+local function undo()
+    if #undoStack == 0 then
+        setStatus("Отменять нечего", false, 3)
+        return
+    end
+    redoStack[#redoStack + 1] = snapshot()
+    restoreSnapshot(table.remove(undoStack))
+    setStatus("Отменено", false, 3)
+end
+
+local function redo()
+    if #redoStack == 0 then
+        setStatus("Повторять нечего", false, 3)
+        return
+    end
+    undoStack[#undoStack + 1] = snapshot()
+    if #undoStack > UNDO_LIMIT then table.remove(undoStack, 1) end
+    restoreSnapshot(table.remove(redoStack))
+    setStatus("Повторено", false, 3)
+end
+
+-- ===== Умные отступы =====
+-- Строка до курсора заканчивается на then/do/function/repeat/{/( ?
+local function needsIndent(before)
+    local s = before:gsub("%s+$", "")
+    if s == "" then return false end
+    -- %f[%w] — граница слова, чтобы "todo" не считался за "do".
+    if s:match("%f[%w]then$") or s:match("%f[%w]do$")
+        or s:match("%f[%w]function$") or s:match("%f[%w]repeat$") then
+        return true
+    end
+    local last = s:sub(-1)
+    return last == "{" or last == "("
+end
+
+local CLOSERS = {
+    ["end"] = true, ["else"] = true, ["elseif"] = true,
+    ["until"] = true, ["}"] = true, [")"] = true,
+}
+
+-- После ввода закрывающего слова/скобки в начале строки убирает один
+-- отступ (4 пробела), сдвигая строку влево.
+local function maybeDedent()
+    local line = lines[cy]
+    local before = usub(line, 1, cx)
+    local indent, word = before:match("^( +)([%a_]+)$")
+    if not word then
+        indent, word = before:match("^( +)([})])$")
+    end
+    if not word or not CLOSERS[word] then return end
+    local n = #indent
+    if n < 4 then return end
+    -- Не сдвигаем, если дальше идёт продолжение слова (например, "ending").
+    local rest = usub(line, cx + 1, ulen(line))
+    if rest ~= "" and rest:match("^[%w_]") then return end
+    lines[cy] = indent:sub(1, n - 4) .. usub(line, n + 1, ulen(line))
+    cx = cx - 4
+end
+
 local function insertChar(ch)
+    pushUndo()
     local line = lines[cy]
     lines[cy] = usub(line, 1, cx) .. ch .. usub(line, cx + 1, ulen(line))
     cx = cx + ulen(ch)
@@ -144,43 +249,49 @@ local function insertChar(ch)
 end
 
 local function newline()
+    pushUndo()
     local line = lines[cy]
     local left = usub(line, 1, cx)
     local right = usub(line, cx + 1, ulen(line))
+    -- Умный отступ: после then/do/function/{/(/repeat новая строка начинается
+    -- с 4 пробелов. Отступ переносится и на правую часть (если курсор в середине).
+    local indent = needsIndent(left) and "    " or ""
     lines[cy] = left
-    table.insert(lines, cy + 1, right)
+    table.insert(lines, cy + 1, indent .. right)
     cy = cy + 1
-    cx = 0
+    cx = ulen(indent)
     dirty = true
 end
 
 local function backspace()
+    if cx == 0 and cy <= 1 then return end
+    pushUndo()
     if cx > 0 then
         local line = lines[cy]
         lines[cy] = usub(line, 1, cx - 1) .. usub(line, cx + 1, ulen(line))
         cx = cx - 1
-        dirty = true
-    elseif cy > 1 then
+    else
         local prev = lines[cy - 1]
         local n = ulen(prev)
         lines[cy - 1] = prev .. lines[cy]
         table.remove(lines, cy)
         cy = cy - 1
         cx = n
-        dirty = true
     end
+    dirty = true
 end
 
 local function deleteForward()
     local line = lines[cy]
+    if cx >= ulen(line) and cy >= #lines then return end
+    pushUndo()
     if cx < ulen(line) then
         lines[cy] = usub(line, 1, cx) .. usub(line, cx + 2, ulen(line))
-        dirty = true
-    elseif cy < #lines then
+    else
         lines[cy] = line .. lines[cy + 1]
         table.remove(lines, cy + 1)
-        dirty = true
     end
+    dirty = true
 end
 
 -- ===== Подсветка синтаксиса Lua =====
@@ -304,6 +415,8 @@ local function drawStatusBar()
     local bar
     if searching then
         bar = " Поиск: " .. searchQuery .. "_   (Enter — найти, Esc — отмена)"
+    elseif gotoMode then
+        bar = " Перейти к строке: " .. gotoQuery .. "_   (Enter — перейти, Esc — отмена)"
     elseif statusMsg and computer.uptime() < statusUntil then
         bar = " " .. statusMsg
     else
@@ -428,6 +541,25 @@ local function handleScroll(direction)
     requestDraw()
 end
 
+-- ===== Клик мышью по тексту (touch) =====
+-- Сигнатура события: touch(screenAddress, x, y, button, playerName).
+-- Клик правее поля номеров строк ставит курсор в соответствующую позицию.
+local function handleTouch(x, y)
+    x, y = tonumber(x) or 0, tonumber(y) or 0
+    if y < 1 or y > H - 1 then return end   -- статус-бар и низ экрана
+    if x < TEXT_X then return end           -- поле номеров строк
+
+    local li = topLine + (y - 1)
+    if li < 1 or li > #lines then return end
+    local col = leftCol + (x - TEXT_X)
+
+    cy, cx = li, col
+    clampCursor()          -- курсор в пределах длины строки
+    searchMatch = nil
+    quitArmed = false
+    requestDraw()
+end
+
 -- ===== Обработка клавиш =====
 local function tryQuit()
     if dirty and not quitArmed then
@@ -466,10 +598,51 @@ local function handleSearchKey(char, code)
     requestDraw()
 end
 
+-- Ввод номера строки (режим Ctrl+G)
+local function handleGotoKey(char, code)
+    if code == 1 then                          -- Esc — отменить
+        gotoMode = false
+        gotoQuery = ""
+        setStatus("Переход к строке отменён", false, 3)
+    elseif code == 28 then                     -- Enter — перейти
+        local n = tonumber(gotoQuery)
+        gotoMode = false
+        gotoQuery = ""
+        if n then
+            if n < 1 then n = 1 end
+            if n > #lines then n = #lines end
+            cy = n
+            cx = 0
+            clampCursor()
+            -- Прокрутка: строка по центру видимой области
+            local viewH = H - 1
+            local maxTop = math.max(1, #lines - viewH + 1)
+            topLine = cy - math.floor(viewH / 2)
+            if topLine < 1 then topLine = 1 end
+            if topLine > maxTop then topLine = maxTop end
+            searchMatch = nil
+            setStatus("Строка " .. n, false, 3)
+        else
+            setStatus("Неверный номер строки", true, 3)
+        end
+    elseif code == 14 then                     -- Backspace — стереть цифру
+        local n = ulen(gotoQuery)
+        if n > 0 then gotoQuery = usub(gotoQuery, 1, n - 1) end
+    elseif char >= 48 and char <= 57 then      -- только цифры (не больше 9)
+        if ulen(gotoQuery) < 9 then gotoQuery = gotoQuery .. uchar(char) end
+    end
+    requestDraw()
+end
+
 local function handleKey(char, code)
     -- В режиме поиска весь ввод идёт в строку поиска
     if searching then
         handleSearchKey(char, code)
+        return
+    end
+    -- В режиме перехода к строке — только цифры/Enter/Esc
+    if gotoMode then
+        handleGotoKey(char, code)
         return
     end
 
@@ -477,6 +650,27 @@ local function handleKey(char, code)
     if code == 33 and char < 32 then
         searching = true
         searchQuery = ""
+        requestDraw()
+        return
+    end
+
+    -- Ctrl+G — переход к строке
+    if code == 34 and char < 32 then
+        gotoMode = true
+        gotoQuery = ""
+        requestDraw()
+        return
+    end
+
+    -- Ctrl+Z — отменить
+    if code == 44 and char < 32 then
+        undo()
+        requestDraw()
+        return
+    end
+    -- Ctrl+Y — повторить
+    if code == 21 and char < 32 then
+        redo()
         requestDraw()
         return
     end
@@ -531,6 +725,7 @@ local function handleKey(char, code)
         insertChar("    ")
     elseif char >= 32 and char ~= 127 then
         insertChar(uchar(char))
+        maybeDedent()              -- закрывающее слово/скобка в начале строки
     end
 
     requestDraw()
@@ -545,6 +740,8 @@ local okRun, errRun = pcall(function()
         local ev, _, p2, p3, p4 = event.pull(0.05)
         if ev == "key_down" then
             handleKey(tonumber(p2) or 0, tonumber(p3) or 0)
+        elseif ev == "touch" then
+            handleTouch(p2, p3)
         elseif ev == "scroll" then
             handleScroll(tonumber(p4) or 0)
         elseif ev == nil then
