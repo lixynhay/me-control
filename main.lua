@@ -10,6 +10,7 @@ local component = require("component")
 local event = require("event")
 local unicode = require("unicode")
 local computer = require("computer")
+local filesystem = require("filesystem")
 local gpu = component.gpu
 
 local config = require("config")
@@ -67,6 +68,11 @@ local state = {
     canCraftAction = false, -- роль + глобальный флаг: можно ли заказывать
     globalRestrictions = {}, -- расшифровки сработавших глобальных запретов
     showRestrictions = false,
+    dashMode = "net",        -- «Главная» для admin+: "net" (сеть) | "system" (система)
+    systemInfo = {},         -- uptime/память/латентность API для секции «Система»
+    healthHistory = {},      -- последние строки /home/healthcheck.history (разобранные)
+    healthDirty = true,      -- принудительно перечитать историю
+    lastHealthLoad = 0,
     showHistory = false,      -- открыта личная история операций
     historyEntries = {},
     showItemInfo = false,     -- открыты детали предмета (Raw ID / NBT)
@@ -279,15 +285,89 @@ local function applyLogSearchFilter()
     if state.logsPage < 1 then state.logsPage = 1 end
 end
 
+-- ===== История healthcheck для секции «Система» =====
+local HEALTH_HISTORY_PATH = "/home/healthcheck.history"
+local HEALTH_HISTORY_ROWS = 5
+local HEALTH_HISTORY_TTL = 10   -- секунд между авто-перечитываниями файла
+
+-- Читает последние N строк истории и разбирает их.
+-- Нет файла / ошибка чтения -> пустой список (UI покажет «История пуста»).
+-- Битая строка -> { broken = true } (UI покажет ERR, панель не падает).
+local function readHealthHistory(limit)
+    limit = math.floor(tonumber(limit) or HEALTH_HISTORY_ROWS)
+    if limit <= 0 then return {} end
+
+    local rows = {}
+    pcall(function()
+        if not filesystem.exists(HEALTH_HISTORY_PATH) then return end
+        local f = io.open(HEALTH_HISTORY_PATH, "r")
+        if not f then return end
+        local content = f:read("*a")
+        f:close()
+        if not content or content == "" then return end
+
+        local lines = {}
+        for line in content:gmatch("[^\r\n]+") do
+            line = line:match("^%s*(.-)%s*$")
+            if line ~= "" then lines[#lines + 1] = line end
+        end
+
+        local start = #lines - limit + 1
+        if start < 1 then start = 1 end
+        for i = start, #lines do
+            rows[#rows + 1] = ui.parseHealthcheckLine(lines[i])
+        end
+    end)
+    return rows
+end
+
+-- Текущие метрики ПК для секции «Система».
+-- totalMemory/freeMemory могут отсутствовать на старых сборках -> nil, UI покажет «нет данных».
+local function collectSystemInfo(apiMs)
+    local sys = {
+        uptime = 0,
+        memFreeKb = nil,
+        memTotalKb = nil,
+        apiMs = apiMs,
+        config = db.getConfig() or {},
+    }
+    local okUp, up = pcall(computer.uptime)
+    if okUp then sys.uptime = tonumber(up) or 0 end
+    pcall(function()
+        sys.memTotalKb = tonumber(computer.totalMemory())
+        sys.memFreeKb = tonumber(computer.freeMemory())
+    end)
+    return sys
+end
+
 local function updateList(force)
     -- force=true — принудительно обновить TTL-кэш предметов МЭ
     if force then api.getNetworkItems(true) end
     if state.currentTab == "DASH" then
-        -- Дашборд: сводка по сети + список крафт-процессоров + журнал
+        -- «Главная»: сводка по сети + журнал. Статистика AE2 и системные
+        -- метрики добавляются только соответствующим ролям.
         state.items = {}
+        local t0 = computer.uptime()
         state.networkInfo = api.getNetworkInfo()
+        local apiMs = (computer.uptime() - t0) * 1000
         state.networkInfo.crafting = api.getCraftingInfo()
         state.logs = db.getLogs()
+
+        if state.canModerate then
+            state.storageInfo = api.getStorageInfo()
+            state.networkInfo.storage = state.storageInfo
+        end
+
+        if state.isAdmin then
+            state.systemInfo = collectSystemInfo(apiMs)
+
+            local now = computer.uptime()
+            if state.healthDirty or (now - (state.lastHealthLoad or 0)) >= HEALTH_HISTORY_TTL then
+                state.healthHistory = readHealthHistory(HEALTH_HISTORY_ROWS)
+                state.lastHealthLoad = now
+                state.healthDirty = false
+            end
+        end
     elseif state.currentTab == "ME" then
         state.items = api.getNetworkItems()
     elseif state.currentTab == "INV" then
@@ -304,12 +384,6 @@ local function updateList(force)
             table.insert(state.adminList, {name = name, data = data})
         end
         table.sort(state.adminList, function(a, b) return a.name < b.name end)
-    elseif state.currentTab == "STATS" then
-        state.items = {}
-        state.networkInfo = api.getNetworkInfo()
-        state.storageInfo = api.getStorageInfo()
-        state.networkInfo.storage = state.storageInfo
-        state.networkInfo.crafting = api.getCraftingInfo()
     elseif state.currentTab == "CRAFT" and state.canCraftTab then
         state.items = {}
         state.craftables = api.getCraftables()
@@ -497,9 +571,10 @@ local function switchTab(tabId)
     state.isSearching = false
     state.isLogSearching = false
     state.logClearArmed = false
-    -- При входе на «Главную» запрашиваем свежий журнал (последние записи)
+    -- При входе на «Главную» запрашиваем свежий журнал и историю healthcheck
     if tabId == "DASH" then
         state.logs = db.getLogs()
+        state.healthDirty = true
     end
     updateList(); requestRedraw()
     return true
@@ -583,7 +658,7 @@ if initialPlayer and initialPlayer ~= "" then
 end
 
 -- Подсказка о горячих клавишах при запуске
-state.statusMsg = "F1–F6 — вкладки, / — поиск, 1/2/3 — фильтр журнала"
+state.statusMsg = "F1–F3, F5–F6 — вкладки, / — поиск, 1/2/3 — фильтр журнала"
 state.statusLevel = "info"
 state.statusErr = false
 
@@ -680,13 +755,13 @@ while true do
         requestRedraw()
     end
     
-    -- Автообновление статистики, дашборда и монитора раз в 2 секунды
+    -- Автообновление дашборда и монитора раз в 2 секунды
     -- (не трогаем открытую карточку предмета)
-    if state.selectedItem == nil and (state.currentTab == "STATS" or state.currentTab == "MON" or state.currentTab == "DASH") and computer.uptime() - state.lastUpdate > 2 then
+    if state.selectedItem == nil and (state.currentTab == "MON" or state.currentTab == "DASH") and computer.uptime() - state.lastUpdate > 2 then
         updateList()
 
-        -- Точка для графика энергии (вкладки «Статистика» и «Главная»)
-        if (state.currentTab == "STATS" or state.currentTab == "DASH") and state.networkInfo then
+        -- Точка для графика энергии (только там, где он рисуется: moderator+)
+        if state.currentTab == "DASH" and state.canModerate and state.networkInfo then
             local eStored = tonumber(state.networkInfo.energyStored)
             local eMax = tonumber(state.networkInfo.energyMax)
             if eStored and eMax and eMax > 0 then
@@ -773,11 +848,12 @@ while true do
 
         -- Коды клавиш из /lib/core/full_keyboard.lua OpenOS:
         --   F1=59 (0x3B) … F6=64 (0x40), "/"=53 (0x35)
+        -- F4 свободна: вкладки «Статистика» больше нет (её блоки переехали
+        -- на «Главную»). Пустые клавиши не занимаем.
         local function keyToTab(code)
             if code == 59 then return "DASH" end    -- F1
             if code == 60 then return "ME" end      -- F2
             if code == 61 then return "INV" end     -- F3
-            if code == 62 then return "STATS" end   -- F4
             if code == 63 then return "CRAFT" end   -- F5
             if code == 64 then return "MON" end     -- F6
             return nil
@@ -1038,7 +1114,21 @@ while true do
             setStatus("Сортировка: " .. (names[state.sortMode] or state.sortMode))
 
         elseif not state.selectedItem and state.currentTab == "DASH" then
-            -- Кнопки дашборда: МЭ-СЕТЬ / СДАТЬ ВСЁ / ОБНОВИТЬ
+            -- Переключатель «Сеть / Система» (только admin/techadmin)
+            if state.isAdmin then
+                for _, m in ipairs(ui.getDashModeLayout(W, H)) do
+                    if y == m.y and x >= m.x and x < m.x + m.w then
+                        if state.dashMode ~= m.id then
+                            state.dashMode = m.id
+                            if m.id == "system" then state.healthDirty = true end
+                            requestRedraw()
+                        end
+                        break
+                    end
+                end
+            end
+
+            -- Кнопки дашборда: МЭ-СЕТЬ / СДАТЬ ВСЁ / МОИ ДЕЙСТВИЯ / ОБНОВИТЬ
             for _, b in ipairs(ui.getDashboardLayout(W, H)) do
                 if y == b.y and x >= b.x and x < b.x + b.w then
                     if b.action == "net" then
@@ -1065,6 +1155,7 @@ while true do
                     elseif b.action == "refresh" then
                         state.lastUpdate = 0
                         state.energyHistory = {}
+                        state.healthDirty = true   -- перечитать healthcheck.history
                         updateList(true); requestRedraw()
                         setStatus("Данные обновлены")
                     end

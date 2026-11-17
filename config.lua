@@ -1,6 +1,6 @@
 local config = {}
 
-config.version = "v1.12.6"
+config.version = "v1.12.7"
 
 -- Уровни ролей (используются в проверках прав крафта). Не трогаем db.lua.
 config.LEVEL_BANNED    = 0

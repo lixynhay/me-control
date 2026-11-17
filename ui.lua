@@ -48,7 +48,6 @@ function ui.getTabs(canModerate, isAdmin, canCraft)
         { id = "DASH",  label = " Главная " },
         { id = "ME",    label = " МЭ-сеть " },
         { id = "INV",   label = " Инвентарь " },
-        { id = "STATS", label = " Статистика " },
         { id = "MON",   label = " Монитор " }
     }
     if canCraft then
@@ -299,9 +298,6 @@ function ui.drawMain(W, H, state)
         return
     elseif state.currentTab == "ADMIN" then
         ui.drawAdmin(W, H, state.adminList)
-        return
-    elseif state.currentTab == "STATS" then
-        ui.drawStats(W, H, state.networkInfo or {}, state.storageInfo, state.energyHistory)
         return
     elseif state.currentTab == "CRAFT" then
         ui.drawCraft(W, H, state.craftables or {}, state.craftPage or 1, state.totalPages or 1)
@@ -1330,6 +1326,212 @@ function ui.drawStats(W, H, info, storage, history)
     gpu.setForeground(C.fg)
 end
 
+-- ===== Системная панель (admin+): метрики ПК и история healthcheck =====
+
+-- Секунды -> ЧЧ:ММ (компактный uptime для системной секции)
+function ui.formatUptimeHM(sec)
+    sec = math.floor(tonumber(sec) or 0)
+    if sec < 0 then sec = 0 end
+    return string.format("%02d:%02d", math.floor(sec / 3600), math.floor((sec % 3600) / 60))
+end
+
+-- Текстовая полоса заполнения памяти: bar, процент занятого.
+-- freeKb/totalKb — как их отдают computer.freeMemory()/totalMemory().
+function ui.memoryBar(freeKb, totalKb, width)
+    local total = tonumber(totalKb)
+    local free = tonumber(freeKb) or 0
+    if not total or total <= 0 then return nil, 0 end
+    local used = total - free
+    if used < 0 then used = 0 end
+    if used > total then used = total end
+    local pct = percentOf(used, total)
+    return progressBar(pct, width or 20), pct
+end
+
+-- Разбор одной JSON-строки из /home/healthcheck.history.
+-- Битая строка -> { broken = true }: UI не падает и показывает ERR.
+function ui.parseHealthcheckLine(line)
+    if type(line) ~= "string" or line == "" then return { broken = true } end
+
+    local out = {}
+    local pos, n = 1, #line
+    local function skip()
+        while pos <= n and line:sub(pos, pos):match("%s") do pos = pos + 1 end
+    end
+
+    skip()
+    if line:sub(pos, pos) ~= "{" then return { broken = true } end
+    pos = pos + 1
+
+    while true do
+        skip()
+        local ch = line:sub(pos, pos)
+        if ch == "}" then pos = pos + 1; break end
+        if ch ~= '"' then return { broken = true } end
+
+        local keyEnd = line:find('"', pos + 1, true)
+        if not keyEnd then return { broken = true } end
+        local key = line:sub(pos + 1, keyEnd - 1)
+        pos = keyEnd + 1
+
+        skip()
+        if line:sub(pos, pos) ~= ":" then return { broken = true } end
+        pos = pos + 1
+        skip()
+
+        local value
+        if line:sub(pos, pos) == '"' then
+            local vend = line:find('"', pos + 1, true)
+            if not vend then return { broken = true } end
+            value = line:sub(pos + 1, vend - 1)
+            pos = vend + 1
+        else
+            local s, e = line:find("^[-%d%.eE+]+", pos)
+            if s then
+                value = tonumber(line:sub(s, e)) or 0
+                pos = e + 1
+            else
+                local word = line:match("^%a+", pos)
+                if word == "true" then value = true
+                elseif word == "false" then value = false
+                elseif word == "null" then value = nil
+                else return { broken = true } end
+                pos = pos + #word
+            end
+        end
+
+        if key ~= "" then out[key] = value end
+
+        skip()
+        local sep = line:sub(pos, pos)
+        pos = pos + 1
+        if sep == "}" then break end
+        if sep ~= "," then return { broken = true } end
+        -- после запятой обязан идти следующий ключ (висячая запятая = битая строка)
+        skip()
+        if line:sub(pos, pos) ~= '"' then return { broken = true } end
+    end
+
+    if out.version == nil and out.ts == nil then return { broken = true } end
+    return out
+end
+
+-- Секция «Система» внутри «Главной» (только admin/techadmin).
+-- state.systemInfo  = { uptime, memFreeKb, memTotalKb, apiMs, config }
+-- state.healthHistory = массив строк из ui.parseHealthcheckLine
+function ui.drawSystemPanel(W, H, state, top)
+    state = state or {}
+    local sys = state.systemInfo or {}
+    local info = state.networkInfo or {}
+    local lastRow = H - 5
+    local leftX = 4
+    local valueX = leftX + 14
+    local y = top or 5
+
+    local function line(label, value, color)
+        if y > lastRow then return end
+        gpu.setForeground(C.white)
+        gpu.set(leftX, y, label)
+        gpu.setForeground(color or C.fg)
+        gpu.set(valueX, y, tostring(value))
+        y = y + 1
+    end
+
+    line("Версия:", tostring(config.version or "?"), C.title)
+    line("Uptime:", ui.formatUptimeHM(sys.uptime), C.ok)
+
+    local freeKb, totalKb = tonumber(sys.memFreeKb), tonumber(sys.memTotalKb)
+    if freeKb and totalKb and totalKb > 0 then
+        line("Память:", string.format("Свободно %d MB / Всего %d MB",
+            math.floor(freeKb / 1024), math.floor(totalKb / 1024)), C.fg)
+        local bar, pct = ui.memoryBar(freeKb, totalKb)
+        if bar and y <= lastRow then
+            local color = C.ok
+            if pct >= 90 then color = C.danger
+            elseif pct >= 70 then color = C.admin end
+            gpu.setForeground(color)
+            gpu.set(valueX, y, bar .. " " .. tostring(pct) .. "%")
+            y = y + 1
+        end
+    else
+        line("Память:", "нет данных", C.muted)
+    end
+
+    local apiMs = tonumber(sys.apiMs)
+    if apiMs then
+        line("МЭ-сеть:", "Предметов " .. tostring(info.totalItems or 0) ..
+            " | API " .. tostring(math.floor(apiMs)) .. " мс", C.ok)
+    else
+        line("МЭ-сеть:", "Предметов " .. tostring(info.totalItems or 0) .. " | API н/д", C.muted)
+    end
+
+    -- Глобальные флаги: выключенные подсвечиваем красным
+    local cfg = sys.config or {}
+    if y <= lastRow then
+        gpu.setForeground(C.white)
+        gpu.set(leftX, y, "Флаги:")
+        local fx = valueX
+        local flags = {
+            { name = "Забор", on = cfg.allowUserWithdraw ~= false },
+            { name = "Сдача", on = cfg.allowUserDeposit ~= false },
+            { name = "Крафт", on = cfg.allowUserCraft ~= false },
+        }
+        for _, f in ipairs(flags) do
+            local txt = f.name .. ": " .. (f.on and "ВКЛ" or "ВЫКЛ")
+            gpu.setForeground(f.on and C.ok or C.err)
+            gpu.set(fx, y, txt)
+            fx = fx + unicode.len(txt) + 2
+        end
+        y = y + 1
+    end
+
+    -- История healthcheck
+    if y <= lastRow then
+        gpu.setForeground(C.title)
+        gpu.set(leftX, y, "История (healthcheck):")
+        y = y + 1
+    end
+
+    local rows = state.healthHistory or {}
+    if #rows == 0 then
+        if y <= lastRow then
+            gpu.setForeground(C.muted)
+            gpu.set(leftX + 2, y, "История пуста")
+        end
+        return
+    end
+
+    if y <= lastRow then
+        gpu.setForeground(C.muted)
+        gpu.set(leftX + 2, y, string.format("%-7s %-9s %-9s %-7s %s",
+            "Uptime", "Версия", "RAM Free", "Предм.", "API"))
+        y = y + 1
+    end
+
+    for i = 1, math.min(5, #rows) do
+        if y > lastRow then break end
+        local r = rows[i]
+        if r.broken then
+            gpu.setForeground(C.err)
+            gpu.set(leftX + 2, y, "ERR  битая строка истории")
+        else
+            local when = tonumber(r.uptime_secs) and ui.formatUptimeHM(r.uptime_secs)
+                or tostring(r.ts or "--:--")
+            local ver = tostring(r.version or "?")
+            local freeMb = "-"
+            if tonumber(r.mem_free_kb) then
+                freeMb = math.floor(tonumber(r.mem_free_kb) / 1024) .. " MB"
+            end
+            local items = r.items_count ~= nil and tostring(r.items_count) or "-"
+            local api = r.cold_call_ms ~= nil and tostring(r.cold_call_ms) or "-"
+            gpu.setForeground(C.fg)
+            gpu.set(leftX + 2, y, string.format("%-7s %-9s %-9s %-7s %s",
+                when, ver, freeMb, items, api))
+        end
+        y = y + 1
+    end
+end
+
 -- ===== Вкладка «Главная» (дашборд) =====
 -- Русские подписи действий в журнале -> человекочитаемый текст
 local ACTION_LABEL = {
@@ -1360,8 +1562,32 @@ function ui.getDashboardLayout(W, H)
     }
 end
 
+-- Режимы «Главной» для admin/techadmin: сеть AE2 или метрики ПК
+ui.DASH_MODES = {
+    { id = "net",    label = "Сеть" },
+    { id = "system", label = "Система" },
+}
+
+-- Раскладка переключателя «[Сеть] / [Система]» (общая для отрисовки и кликов)
+function ui.getDashModeLayout(W, H)
+    local bw, gap = 12, 1
+    local total = bw * #ui.DASH_MODES + gap * (#ui.DASH_MODES - 1)
+    local x = W - 3 - total
+    if x < 3 then x = 3 end
+    local out = {}
+    for i, m in ipairs(ui.DASH_MODES) do
+        out[#out + 1] = {
+            x = x + (i - 1) * (bw + gap), y = 5, w = bw,
+            id = m.id, label = m.label,
+        }
+    end
+    return out
+end
+
 -- Отрисовка дашборда. state — общий state из main.lua:
---   networkInfo (totalItems/totalTypes/энергия), crafting (busy/total), logs.
+--   networkInfo (totalItems/totalTypes/энергия), crafting (busy/total), logs,
+--   storageInfo, canModerate/isAdmin, dashMode ("net"/"system"),
+--   systemInfo и healthHistory (только для admin+).
 function ui.drawDashboard(W, H, state)
     state = state or {}
     local info = state.networkInfo or {}
@@ -1377,6 +1603,32 @@ function ui.drawDashboard(W, H, state)
     local title = "--- Главная ---"
     gpu.set(math.floor((W - unicode.len(title)) / 2) + 1, 4, title)
 
+    -- Переключатель «Сеть / Система» — только admin/techadmin
+    local isAdmin = state.isAdmin == true
+    local mode = state.dashMode or "net"
+    local top = 5
+    if isAdmin then
+        for _, m in ipairs(ui.getDashModeLayout(W, H)) do
+            local active = (m.id == mode)
+            ui.drawButton(m.x, m.y, m.w, m.label, false,
+                active and C.tab_active or C.btn)
+        end
+        top = 6
+    end
+
+    -- Режим «Система»: метрики ПК и история healthcheck
+    if isAdmin and mode == "system" then
+        ui.drawSystemPanel(W, H, state, top)
+        for _, b in ipairs(ui.getDashboardLayout(W, H)) do
+            local bg = C.btn
+            if b.action == "deposit" then bg = C.warning end
+            if b.action == "refresh" then bg = C.ok end
+            ui.drawButton(b.x, b.y, b.w, b.text, false, bg)
+        end
+        gpu.setForeground(C.fg)
+        return
+    end
+
     local lastRow = H - 5
     local colGap = 4
     local leftX = 4
@@ -1386,8 +1638,11 @@ function ui.drawDashboard(W, H, state)
     local rightW = (W - 3) - rightX - 1
     if rightW < 18 then rightW = 18 end
 
+    -- Модератор и выше видит статистику AE2 (энергия, график, диски)
+    local showStats = state.canModerate == true
+
     -- ===== Левая колонка: сводка =====
-    local y = 5
+    local y = top
     gpu.setForeground(C.title)
     gpu.set(leftX, y, "Сводка")
     y = y + 1
@@ -1412,84 +1667,129 @@ function ui.drawDashboard(W, H, state)
     gpu.setForeground(busy > 0 and C.admin or C.ok)
     gpu.set(leftX + 2, y, tostring(busy) .. " / " .. tostring(total))
 
-    -- ===== Правая колонка: энергия =====
-    y = 5
+    -- ===== Правая колонка: энергия и диски (moderator+) =====
+    y = top
+    if showStats then
+        gpu.setForeground(C.title)
+        gpu.set(rightX, y, "Энергия")
+        y = y + 1
+
+        local eStored = tonumber(info.energyStored)
+        local eMax = tonumber(info.energyMax)
+        if eStored and eMax and eMax > 0 then
+            local pct = percentOf(eStored, eMax)
+            gpu.setForeground(C.white)
+            gpu.set(rightX, y, string.format("%d / %d AE (%d%%)",
+                math.floor(eStored), math.floor(eMax), pct))
+            y = y + 1
+
+            -- Полоса заполнения — цельная, ENERGY_BAR_WIDTH символов внутри
+            gpu.setForeground(pct >= 20 and C.ok or C.danger)
+            gpu.set(rightX, y, progressBar(pct, ENERGY_BAR_WIDTH))
+            local barY = y
+            y = y + 1
+
+            -- График строго под полосой; при пустой истории не рисуется вовсе
+            gpu.setForeground(C.ok)
+            drawEnergyGraph(rightX, barY + 1, ENERGY_BAR_WIDTH + 2, history)
+            y = barY + 2
+        else
+            gpu.setForeground(C.muted)
+            gpu.set(rightX, y, "нет данных о энергии")
+            y = y + 2
+        end
+
+        -- Приход / расход
+        local injection = tonumber(info.avgPowerInjection)
+        local usage = tonumber(info.avgPowerUsage)
+        if injection ~= nil or usage ~= nil then
+            injection = injection or 0
+            usage = usage or 0
+            local deficit = usage > injection
+            if y <= lastRow then
+                gpu.setForeground(C.ok)
+                gpu.set(rightX, y, string.format("+%.0f AE/t", injection))
+                gpu.setForeground(C.danger)
+                gpu.set(rightX + 14, y, string.format("-%.0f AE/t", usage))
+                y = y + 1
+            end
+            if deficit and y <= lastRow then
+                gpu.setForeground(C.danger)
+                gpu.set(rightX, y, "[!] Дефицит")
+                y = y + 1
+            end
+        end
+
+        -- Диски (перенесено со вкладки «Статистика»)
+        local storage = state.storageInfo
+        if storage and y <= lastRow then
+            local usedBytes  = tonumber(storage.usedBytes) or 0
+            local totalBytes = tonumber(storage.totalBytes)
+            local usedTypes  = tonumber(storage.usedTypes) or 0
+            local totalTypes = tonumber(storage.totalTypes)
+
+            gpu.setForeground(C.white)
+            gpu.set(rightX, y, "Диски:")
+            y = y + 1
+
+            if totalBytes and totalBytes > 0 and storage.estimated ~= true then
+                local pct = percentOf(usedBytes, totalBytes)
+                local color = C.ok
+                if pct > 95 then color = C.danger
+                elseif pct >= 80 then color = C.admin end
+                if y <= lastRow then
+                    gpu.setForeground(color)
+                    gpu.set(rightX, y, progressBar(pct, 12) .. " " .. tostring(pct) .. "% " ..
+                        formatSize(usedBytes) .. " / " .. formatSize(totalBytes))
+                    y = y + 1
+                end
+            elseif y <= lastRow then
+                gpu.setForeground(C.muted)
+                gpu.set(rightX, y, formatSize(usedBytes) .. " (оценка)")
+                y = y + 1
+            end
+
+            if y <= lastRow then
+                local typesText = tostring(usedTypes)
+                if totalTypes and totalTypes > 0 then
+                    typesText = typesText .. " / " .. tostring(totalTypes)
+                end
+                gpu.setForeground(C.white)
+                gpu.set(rightX, y, "Типов: ")
+                gpu.setForeground(C.ok)
+                gpu.set(rightX + 8, y, typesText)
+                y = y + 1
+            end
+        end
+    end
+
+    -- Инфо-блок в правой колонке: время работы ПК (moderator+) и текущий игрок
+    if y < top + 7 then y = top + 7 end
     gpu.setForeground(C.title)
-    gpu.set(rightX, y, "Энергия")
+    gpu.set(rightX, y, "Сеанс")
     y = y + 1
 
-    local eStored = tonumber(info.energyStored)
-    local eMax = tonumber(info.energyMax)
-    if eStored and eMax and eMax > 0 then
-        local pct = percentOf(eStored, eMax)
+    if showStats then
         gpu.setForeground(C.white)
-        gpu.set(rightX, y, string.format("%d / %d AE (%d%%)",
-            math.floor(eStored), math.floor(eMax), pct))
-        y = y + 1
-
-        -- Полоса заполнения — цельная, ENERGY_BAR_WIDTH символов внутри
-        gpu.setForeground(pct >= 20 and C.ok or C.danger)
-        gpu.set(rightX, y, progressBar(pct, ENERGY_BAR_WIDTH))
-        local barY = y
-        y = y + 1
-
-        -- График строго под полосой; при пустой истории не рисуется вовсе
+        gpu.set(rightX, y, "Время ПК:")
         gpu.setForeground(C.ok)
-        drawEnergyGraph(rightX, barY + 1, ENERGY_BAR_WIDTH + 2, history)
-        y = barY + 2
-    else
-        gpu.setForeground(C.muted)
-        gpu.set(rightX, y, "нет данных о энергии")
-        y = y + 2
+        local okUp, up = pcall(computer.uptime)
+        gpu.set(rightX + 18, y, formatUptime(okUp and up or 0))
+        y = y + 1
     end
 
-    -- Приход / расход
-    local injection = tonumber(info.avgPowerInjection)
-    local usage = tonumber(info.avgPowerUsage)
-    if injection ~= nil or usage ~= nil then
-        injection = injection or 0
-        usage = usage or 0
-        local deficit = usage > injection
-        if y <= lastRow then
-            gpu.setForeground(C.ok)
-            gpu.set(rightX, y, string.format("+%.0f AE/t", injection))
-            gpu.setForeground(C.danger)
-            gpu.set(rightX + 14, y, string.format("-%.0f AE/t", usage))
-            y = y + 1
-        end
-        if deficit and y <= lastRow then
-            gpu.setForeground(C.danger)
-            gpu.set(rightX, y, "[!] Дефицит")
-        end
-    end
-
-    -- Инфо-блок в правой колонке: время работы ПК и текущий игрок
-    -- (заполняет пустоту под энергией)
-    local sessY = 12
-    gpu.setForeground(C.title)
-    gpu.set(rightX, sessY, "Сеанс")
-    sessY = sessY + 1
-
     gpu.setForeground(C.white)
-    gpu.set(rightX, sessY, "Время ПК:")
-    gpu.setForeground(C.ok)
-    local okUp, up = pcall(computer.uptime)
-    gpu.set(rightX + 18, sessY, formatUptime(okUp and up or 0))
-    sessY = sessY + 1
-
-    gpu.setForeground(C.white)
-    gpu.set(rightX, sessY, "Игрок:")
+    gpu.set(rightX, y, "Игрок:")
     if state.currentPlayer then
         gpu.setForeground(C.ok)
-        gpu.set(rightX + 18, sessY, tostring(state.currentPlayer))
+        gpu.set(rightX + 18, y, tostring(state.currentPlayer))
     else
         gpu.setForeground(C.muted)
-        gpu.set(rightX + 18, sessY, "нет")
+        gpu.set(rightX + 18, y, "нет")
     end
 
     -- ===== Центр-низ: последние события =====
-    -- Фиксировано чуть выше низа (y = 12), чтобы блок не прилипал к кнопкам/статусу.
-    local evY = 12
+    local evY = top + 7
     if evY > lastRow then evY = lastRow end
 
     gpu.setForeground(C.title)
