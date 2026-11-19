@@ -15,6 +15,27 @@ local cachedItems = nil
 local cacheTime = 0
 local CACHE_TTL = 2.0
 
+-- ===== TTL-кэш дорогих сведений о сборке (ТЗ-014, Perf) =====
+-- getCpus() и пересчёт хранилища вызываются при каждой перерисовке «Главной»
+-- (раз в 2 с), хотя меняются медленно. Кэшируем на 10 с; force=true —
+-- обновить немедленно (кнопка «Обновить», смена вкладки).
+local DETAILS_TTL = 10
+local craftingCache, craftingCacheAt = nil, nil
+local storageCache, storageCacheAt = nil, nil
+
+local function detailsCacheFresh(at)
+    return at ~= nil and (computer.uptime() - at) < DETAILS_TTL
+end
+
+-- Копия, чтобы вызывающий код не мог испортить закэшированную таблицу.
+local function copyTable(src)
+    local out = {}
+    if type(src) == "table" then
+        for k, v in pairs(src) do out[k] = v end
+    end
+    return out
+end
+
 local function getRawItems(force)
     local me = component.me_interface
     if force or not cachedItems or (computer.uptime() - cacheTime > CACHE_TTL) then
@@ -672,34 +693,39 @@ end
 -- Информация о крафт-процессорах: всего и занятых.
 -- me.getCpus() возвращает список таблиц вида { name, storage, coprocessors, busy }.
 -- Если метод недоступен или упал — вернёт нули (без исключений).
-function api.getCraftingInfo()
+function api.getCraftingInfo(force)
+    if not force and craftingCache and detailsCacheFresh(craftingCacheAt) then
+        return copyTable(craftingCache)
+    end
+
     local result = { totalCpus = 0, busyCpus = 0 }
 
     local okMe, me = pcall(function() return component.me_interface end)
-    if not okMe or not me then return result end
-
-    local okFn, fn = pcall(function() return me.getCpus end)
-    if not okFn or fn == nil then return result end
-
-    local ok, cpus = pcall(function() return me.getCpus() end)
-    if not ok or type(cpus) ~= "table" then return result end
-
-    for _, cpu in pairs(cpus) do
-        result.totalCpus = result.totalCpus + 1
-        local busy = nil
-        if type(cpu) == "table" then
-            busy = cpu.busy
-            if busy == nil then busy = cpu.isBusy end
-            if type(busy) == "function" then
-                local okB, b = pcall(function() return cpu.busy() end)
-                if okB then busy = b else busy = nil end
+    if okMe and me then
+        local okFn, fn = pcall(function() return me.getCpus end)
+        if okFn and fn ~= nil then
+            local ok, cpus = pcall(function() return me.getCpus() end)
+            if ok and type(cpus) == "table" then
+                for _, cpu in pairs(cpus) do
+                    result.totalCpus = result.totalCpus + 1
+                    local busy = nil
+                    if type(cpu) == "table" then
+                        busy = cpu.busy
+                        if busy == nil then busy = cpu.isBusy end
+                        if type(busy) == "function" then
+                            local okB, b = pcall(function() return cpu.busy() end)
+                            if okB then busy = b else busy = nil end
+                        end
+                    end
+                    if busy == true then
+                        result.busyCpus = result.busyCpus + 1
+                    end
+                end
             end
-        end
-        if busy == true then
-            result.busyCpus = result.busyCpus + 1
         end
     end
 
+    craftingCache, craftingCacheAt = copyTable(result), computer.uptime()
     return result
 end
 
@@ -967,7 +993,11 @@ end
 --      Это точное значение занятого, просто без общего объёма.
 --   3) Общий объём (ёмкость) можно задать вручную в config.storage.totalBytes —
 --      тогда в UI появится реальный процент заполнения.
-function api.getStorageInfo()
+function api.getStorageInfo(force)
+    if not force and storageCache and detailsCacheFresh(storageCacheAt) then
+        return copyTable(storageCache)
+    end
+
     local okMe, me = pcall(function() return component.me_interface end)
     if not okMe or not me then return nil end
 
@@ -1041,6 +1071,7 @@ function api.getStorageInfo()
         result.totalTypes = manualTypes
     end
 
+    storageCache, storageCacheAt = copyTable(result), computer.uptime()
     return result
 end
 
@@ -1048,8 +1079,7 @@ end
 function api.getThresholdStatus()
     local list = {}
     local thresholds = db.getThresholds()
-    local me = component.me_interface
-    
+
     -- Карта текущих количеств по имени предмета (из TTL-кэша)
     local currentMap = {}
     local items = getRawItems(false)

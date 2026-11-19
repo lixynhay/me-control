@@ -58,11 +58,6 @@ function db.getRoleLevel(name)
     return db.ROLE_LEVELS[p.role] or 0
 end
 
-function db.getRoleName(name)
-    local p = db.getPlayer(name)
-    return p and p.role or nil
-end
-
 -- Проверка иерархии: может ли actorName управлять targetName.
 -- Себя менять нельзя (кроме отдельных операций вроде смены собственных флагов).
 function db.hasPermission(actorName, targetName, action)
@@ -468,8 +463,8 @@ function db.getConfig()
     return cfg
 end
 
--- Изменить глобальную настройку.
--- actor обязателен: прямые вызовы без прав (в т.ч. из сторонних скриптов) запрещены.
+-- Изменить глобальную настройку (публичный API для скриптов/medit, UI его
+-- не вызывает). actor обязателен: прямые вызовы без прав запрещены.
 function db.setConfig(actorName, key, value)
     if not actorName then return false, "forbidden" end
     local level = db.getRoleLevel(actorName)
@@ -613,12 +608,6 @@ function db.clearLogs(actorName)
     data.logs = {}
     db.save()
     return true
-end
-
--- Сколько записей в журнале
-function db.getLogsCount()
-    if not data or not data.logs then return 0 end
-    return #data.logs
 end
 
 -- Забанить игрока. durationMinutes > 0 — временный бан, иначе навсегда

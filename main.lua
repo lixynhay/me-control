@@ -366,11 +366,11 @@ local function updateList(force)
         local t0 = computer.uptime()
         state.networkInfo = api.getNetworkInfo()
         local apiMs = (computer.uptime() - t0) * 1000
-        state.networkInfo.crafting = api.getCraftingInfo()
+        state.networkInfo.crafting = api.getCraftingInfo(force)
         state.logs = db.getLogs()
 
         if state.canModerate then
-            state.storageInfo = api.getStorageInfo()
+            state.storageInfo = api.getStorageInfo(force)
             state.networkInfo.storage = state.storageInfo
         end
 
@@ -892,12 +892,7 @@ while true do
         if hotkeyTab then
             -- F1–F6: переключение вкладок (работает в любом режиме).
             -- Доступ к крафту перечитывается из БД в switchTab.
-            local needsModeration = (hotkeyTab == "LOGS" or hotkeyTab == "ADMIN")
-            if needsModeration and not state.canModerate then
-                setStatus("Недостаточно прав: раздел доступен администратору", "err")
-            else
-                switchTab(hotkeyTab)
-            end
+            switchTab(hotkeyTab)
         elseif (keyCode == 53 or charCode == 47) and not typingText then
             -- «/» — быстрый поиск (аналог кнопки «ПОИСК»)
             if state.currentTab == "LOGS" then
