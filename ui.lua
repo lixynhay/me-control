@@ -1348,6 +1348,121 @@ function ui.parseHealthcheckLine(line)
     return out
 end
 
+-- ===== Блок «Диски» в секции «Система» (admin+) =====
+ui.DRIVES_PER_PAGE = 5
+
+-- Геометрия блока (общая для отрисовки и обработки кликов).
+-- Живёт в правой колонке «Главной», под переключателем «Сеть/Система».
+function ui.getDrivesLayout(W, H, totalDrives, page)
+    local colGap = 4
+    local leftX = 4
+    local leftW = math.floor((W - 5 - colGap) / 2) - 1
+    if leftW < 20 then leftW = 20 end
+    local rightX = leftX + leftW + colGap
+    local rightW = (W - 3) - rightX - 1
+    if rightW < 18 then rightW = 18 end
+
+    local top = 6   -- строка 6: под переключателем режимов (строка 5)
+    local total = math.max(0, math.floor(tonumber(totalDrives) or 0))
+    local totalPages = math.max(1, math.ceil(total / ui.DRIVES_PER_PAGE))
+    local cur = math.floor(tonumber(page) or 1)
+    if cur < 1 then cur = 1 end
+    if cur > totalPages then cur = totalPages end
+
+    local L = {
+        rightX = rightX, rightW = rightW, top = top,
+        page = cur, totalPages = totalPages,
+        prev = { x = rightX + rightW - 10, y = top, w = 4 },
+        next = { x = rightX + rightW - 5,  y = top, w = 4 },
+        drives = {},
+    }
+
+    local startIdx = (cur - 1) * ui.DRIVES_PER_PAGE + 1
+    local shown = math.min(ui.DRIVES_PER_PAGE, math.max(0, total - startIdx + 1))
+    for i = 1, shown do
+        local rowY = top + 1 + (i - 1) * 2
+        L.drives[i] = {
+            index = startIdx + i - 1,
+            infoY = rowY,
+            plus  = { x = rightX,      y = rowY + 1, w = 6 },
+            minus = { x = rightX + 7,  y = rowY + 1, w = 6 },
+            eject = { x = rightX + 14, y = rowY + 1, w = 9 },
+        }
+    end
+    return L
+end
+
+-- Компактная строка диска: слот, заполнение, типы, приоритет (+ байты, если влезает).
+function ui.formatDriveLine(drive, width)
+    local pct = percentOf(drive.usedBytes or 0, drive.totalBytes)
+    local usedTypes = tostring(math.floor(tonumber(drive.usedTypes) or 0))
+    local totalTypes = tonumber(drive.totalTypes)
+    local types = (totalTypes and totalTypes > 0) and (usedTypes .. "/" .. math.floor(totalTypes)) or usedTypes
+    local prio = drive.priority ~= nil and tostring(math.floor(drive.priority)) or "-"
+
+    local line = string.format("[%s] %d%% %s P:%s",
+        tostring(drive.slot), pct, types, prio)
+
+    -- Байты добавляем, если есть место (на 80 колонках правая колонка узкая).
+    -- Крупные объёмы — в MB, мелкие — в KB, совсем мелкие — в байтах.
+    local totalBytes = tonumber(drive.totalBytes)
+    if totalBytes and totalBytes > 0 then
+        local usedBytes = tonumber(drive.usedBytes) or 0
+        local sizeText
+        if totalBytes >= 1048576 then
+            sizeText = string.format("%.1f/%.1fMB", usedBytes / 1048576, totalBytes / 1048576)
+        elseif totalBytes >= 1024 then
+            sizeText = string.format("%.0f/%.0fKB", usedBytes / 1024, totalBytes / 1024)
+        else
+            sizeText = string.format("%d/%dB", usedBytes, totalBytes)
+        end
+        local extra = " " .. sizeText
+        if unicode.len(line .. extra) <= (width or 0) then line = line .. extra end
+    end
+
+    if width and unicode.len(line) > width then
+        line = unicode.sub(line, 1, width - 3) .. "..."
+    end
+    return line, pct
+end
+
+function ui.drawDrivesPanel(W, H, state)
+    state = state or {}
+    local drives = state.drives or {}
+    local L = ui.getDrivesLayout(W, H, #drives, state.drivePage or 1)
+
+    gpu.setForeground(C.title)
+    gpu.set(L.rightX, L.top, "Диски")
+    if L.totalPages > 1 then
+        ui.drawButton(L.prev.x, L.prev.y, L.prev.w, "<", false)
+        ui.drawButton(L.next.x, L.next.y, L.next.w, ">", false)
+    end
+
+    if #drives == 0 then
+        gpu.setForeground(C.muted)
+        gpu.set(L.rightX, L.top + 1, "Нет дисководов")
+        return L
+    end
+
+    for i, slotL in ipairs(L.drives) do
+        local d = drives[slotL.index]
+        if d then
+            local text, pct = ui.formatDriveLine(d, L.rightW)
+            -- Цвет: зелёный <90%, жёлтый 70-89%, красный >=90%
+            local color = C.ok
+            if pct >= 90 then color = C.danger
+            elseif pct >= 70 then color = C.admin end
+            gpu.setForeground(color)
+            gpu.set(L.rightX, slotL.infoY, text)
+
+            ui.drawButton(slotL.plus.x, slotL.plus.y, slotL.plus.w, "+P", false, C.limit)
+            ui.drawButton(slotL.minus.x, slotL.minus.y, slotL.minus.w, "-P", false, C.limit)
+            ui.drawButton(slotL.eject.x, slotL.eject.y, slotL.eject.w, "Eject", false, C.warning)
+        end
+    end
+    return L
+end
+
 -- Секция «Система» внутри «Главной» (только admin/techadmin).
 -- state.systemInfo  = { uptime, memFreeKb, memTotalKb, apiMs, config }
 -- state.healthHistory = массив строк из ui.parseHealthcheckLine
@@ -1360,12 +1475,27 @@ function ui.drawSystemPanel(W, H, state, top)
     local valueX = leftX + 14
     local y = top or 5
 
+    -- Ширина левой колонки: значения не должны заезжать в блок «Диски» справа
+    local colGap = 4
+    local leftW = math.floor((W - 5 - colGap) / 2) - 1
+    if leftW < 20 then leftW = 20 end
+    local maxValue = leftW - (valueX - leftX)
+    if maxValue < 6 then maxValue = 6 end
+
+    local function clip(text, width)
+        local t = tostring(text)
+        if width and unicode.len(t) > width then
+            t = unicode.sub(t, 1, math.max(1, width - 3)) .. "..."
+        end
+        return t
+    end
+
     local function line(label, value, color)
         if y > lastRow then return end
         gpu.setForeground(C.white)
         gpu.set(leftX, y, label)
         gpu.setForeground(color or C.fg)
-        gpu.set(valueX, y, tostring(value))
+        gpu.set(valueX, y, clip(value, maxValue))
         y = y + 1
     end
 
@@ -1374,15 +1504,27 @@ function ui.drawSystemPanel(W, H, state, top)
 
     local freeKb, totalKb = tonumber(sys.memFreeKb), tonumber(sys.memTotalKb)
     if freeKb and totalKb and totalKb > 0 then
-        line("Память:", string.format("Свободно %d MB / Всего %d MB",
-            math.floor(freeKb / 1024), math.floor(totalKb / 1024)), C.fg)
-        local bar, pct = ui.memoryBar(freeKb, totalKb)
+        -- На узких экранах длинная подпись не влезает в половину ширины
+        local memText
+        if maxValue >= 30 then
+            memText = string.format("Свободно %d MB / Всего %d MB",
+                math.floor(freeKb / 1024), math.floor(totalKb / 1024))
+        else
+            memText = string.format("%d / %d MB",
+                math.floor(freeKb / 1024), math.floor(totalKb / 1024))
+        end
+        line("Память:", memText, C.fg)
+        -- Ширина полосы подгоняется под колонку, чтобы не обрезалась
+        local barW = maxValue - 6
+        if barW > 20 then barW = 20 end
+        if barW < 6 then barW = 6 end
+        local bar, pct = ui.memoryBar(freeKb, totalKb, barW)
         if bar and y <= lastRow then
             local color = C.ok
             if pct >= 90 then color = C.danger
             elseif pct >= 70 then color = C.admin end
             gpu.setForeground(color)
-            gpu.set(valueX, y, bar .. " " .. tostring(pct) .. "%")
+            gpu.set(valueX, y, clip(bar .. " " .. tostring(pct) .. "%", maxValue))
             y = y + 1
         end
     else
@@ -1390,11 +1532,21 @@ function ui.drawSystemPanel(W, H, state, top)
     end
 
     local apiMs = tonumber(sys.apiMs)
-    if apiMs then
-        line("МЭ-сеть:", "Предметов " .. tostring(info.totalItems or 0) ..
-            " | API " .. tostring(math.floor(apiMs)) .. " мс", C.ok)
+    local itemsCount = tostring(info.totalItems or 0)
+    if maxValue >= 26 then
+        if apiMs then
+            line("МЭ-сеть:", "Предметов " .. itemsCount ..
+                " | API " .. tostring(math.floor(apiMs)) .. " мс", C.ok)
+        else
+            line("МЭ-сеть:", "Предметов " .. itemsCount .. " | API н/д", C.muted)
+        end
     else
-        line("МЭ-сеть:", "Предметов " .. tostring(info.totalItems or 0) .. " | API н/д", C.muted)
+        -- Узкая колонка: компактная запись, чтобы не заезжать в блок «Диски»
+        if apiMs then
+            line("МЭ-сеть:", itemsCount .. " шт | " .. tostring(math.floor(apiMs)) .. " мс", C.ok)
+        else
+            line("МЭ-сеть:", itemsCount .. " шт | н/д", C.muted)
+        end
     end
 
     -- Активные автокрафты (лимит задан и флаг включён)
@@ -1406,17 +1558,22 @@ function ui.drawSystemPanel(W, H, state, top)
     if y <= lastRow then
         gpu.setForeground(C.white)
         gpu.set(leftX, y, "Флаги:")
-        local fx = valueX
         local flags = {
-            { name = "Забор", on = cfg.allowUserWithdraw ~= false },
-            { name = "Сдача", on = cfg.allowUserDeposit ~= false },
-            { name = "Крафт", on = cfg.allowUserCraft ~= false },
+            { long = "Забор", short = "З", on = cfg.allowUserWithdraw ~= false },
+            { long = "Сдача", short = "С", on = cfg.allowUserDeposit ~= false },
+            { long = "Крафт", short = "К", on = cfg.allowUserCraft ~= false },
         }
+        local useLong = maxValue >= 30
+        local limitX = valueX + maxValue
+        local fx = valueX
         for _, f in ipairs(flags) do
-            local txt = f.name .. ": " .. (f.on and "ВКЛ" or "ВЫКЛ")
+            local txt = useLong
+                and (f.long .. ":" .. (f.on and "ВКЛ" or "ВЫКЛ"))
+                or (f.short .. ":" .. (f.on and "ВКЛ" or "ВЫКЛ"))
+            if fx + unicode.len(txt) > limitX then break end
             gpu.setForeground(f.on and C.ok or C.err)
             gpu.set(fx, y, txt)
-            fx = fx + unicode.len(txt) + 2
+            fx = fx + unicode.len(txt) + 1
         end
         y = y + 1
     end
@@ -1439,8 +1596,9 @@ function ui.drawSystemPanel(W, H, state, top)
 
     if y <= lastRow then
         gpu.setForeground(C.muted)
-        gpu.set(leftX + 2, y, string.format("%-7s %-9s %-9s %-7s %s",
-            "Uptime", "Версия", "RAM Free", "Предм.", "API"))
+        -- Колонки узкие, чтобы таблица не заходила в правую колонку с блоком «Диски»
+        gpu.set(leftX + 2, y, string.format("%-6s %-7s %-8s %-3s %s",
+            "Uptime", "Версия", "RAM Free", "Шт", "API"))
         y = y + 1
     end
 
@@ -1461,7 +1619,7 @@ function ui.drawSystemPanel(W, H, state, top)
             local items = r.items_count ~= nil and tostring(r.items_count) or "-"
             local api = r.cold_call_ms ~= nil and tostring(r.cold_call_ms) or "-"
             gpu.setForeground(C.fg)
-            gpu.set(leftX + 2, y, string.format("%-7s %-9s %-9s %-7s %s",
+            gpu.set(leftX + 2, y, string.format("%-6s %-7s %-8s %-3s %s",
                 when, ver, freeMb, items, api))
         end
         y = y + 1
@@ -1552,9 +1710,10 @@ function ui.drawDashboard(W, H, state)
         top = 6
     end
 
-    -- Режим «Система»: метрики ПК и история healthcheck
+    -- Режим «Система»: метрики ПК, история healthcheck и диски
     if isAdmin and mode == "system" then
         ui.drawSystemPanel(W, H, state, top)
+        ui.drawDrivesPanel(W, H, state)
         for _, b in ipairs(ui.getDashboardLayout(W, H)) do
             local bg = C.btn
             if b.action == "deposit" then bg = C.warning end

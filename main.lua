@@ -69,6 +69,8 @@ local state = {
     globalRestrictions = {}, -- расшифровки сработавших глобальных запретов
     showRestrictions = false,
     dashMode = "net",        -- «Главная» для admin+: "net" (сеть) | "system" (система)
+    drives = {},             -- список дисководов МЭ (для admin+)
+    drivePage = 1,           -- страница блока «Диски»
     systemInfo = {},         -- uptime/память/латентность API для секции «Система»
     healthHistory = {},      -- последние строки /home/healthcheck.history (разобранные)
     healthDirty = true,      -- принудительно перечитать историю
@@ -371,6 +373,7 @@ local function updateList(force)
 
         if state.isAdmin then
             state.systemInfo = collectSystemInfo(apiMs)
+            state.drives = api.getDrivesInfo() or {}
 
             local now = computer.uptime()
             if state.healthDirty or (now - (state.lastHealthLoad or 0)) >= HEALTH_HISTORY_TTL then
@@ -1200,8 +1203,71 @@ while true do
                 end
             end
 
+            -- Блок «Диски» в режиме «Система» (admin+)
+            local drivesHandled = false
+            if state.isAdmin and state.dashMode == "system" then
+                local DL = ui.getDrivesLayout(W, H, #state.drives, state.drivePage or 1)
+                local function hitRect(r)
+                    return r ~= nil and y == r.y and x >= r.x and x < r.x + r.w
+                end
+
+                if hitRect(DL.prev) then
+                    drivesHandled = true
+                    if DL.page > 1 then
+                        state.drivePage = DL.page - 1
+                        requestRedraw()
+                    end
+                elseif hitRect(DL.next) then
+                    drivesHandled = true
+                    if DL.page < DL.totalPages then
+                        state.drivePage = DL.page + 1
+                        requestRedraw()
+                    end
+                else
+                    for _, slotL in ipairs(DL.drives) do
+                        local d = state.drives[slotL.index]
+                        if d and not drivesHandled then
+                            if hitRect(slotL.plus) then
+                                drivesHandled = true
+                                local newPrio = (tonumber(d.priority) or 0) + 1
+                                local okP, pErr = api.setDrivePriority(d.slot, newPrio)
+                                if okP then
+                                    notify("Приоритет диска " .. tostring(d.slot) .. ": " .. tostring(newPrio))
+                                    state.drives = api.getDrivesInfo() or {}
+                                else
+                                    notify(tostring(pErr or "Не удалось изменить приоритет"), "err")
+                                end
+                                requestRedraw()
+                            elseif hitRect(slotL.minus) then
+                                drivesHandled = true
+                                local newPrio = (tonumber(d.priority) or 0) - 1
+                                local okP, pErr = api.setDrivePriority(d.slot, newPrio)
+                                if okP then
+                                    notify("Приоритет диска " .. tostring(d.slot) .. ": " .. tostring(newPrio))
+                                    state.drives = api.getDrivesInfo() or {}
+                                else
+                                    notify(tostring(pErr or "Не удалось изменить приоритет"), "err")
+                                end
+                                requestRedraw()
+                            elseif hitRect(slotL.eject) then
+                                drivesHandled = true
+                                local okE, eErr = api.ejectDrive(d.slot, state.player)
+                                if okE then
+                                    notify("Диск " .. tostring(d.slot) .. " выгружен в инвентарь")
+                                    state.drives = api.getDrivesInfo() or {}
+                                else
+                                    notify(tostring(eErr or "Не удалось выгрузить диск"), "err")
+                                end
+                                requestRedraw()
+                            end
+                        end
+                    end
+                end
+            end
+
             -- Кнопки дашборда: МЭ-СЕТЬ / СДАТЬ ВСЁ / МОИ ДЕЙСТВИЯ / ОБНОВИТЬ
             for _, b in ipairs(ui.getDashboardLayout(W, H)) do
+                if drivesHandled then break end
                 if y == b.y and x >= b.x and x < b.x + b.w then
                     if b.action == "net" then
                         switchTab("ME")
@@ -1464,21 +1530,21 @@ while true do
                         notify("Крафт доступен с роли user", "err")
                         state.selectedItem = nil
                         requestRedraw()
-                        return
-                    end
-                    -- «СКРАФТИТЬ»
-                    local ok, res, status = api.requestCraft(state.selectedItem, state.quantity)
-                    if ok then
-                        state.lastCraftStatus = status
-                        state.lastCraftCheck = 0
-                        notify("Запрос на крафт отправлен: " .. tostring(state.selectedItem.display or state.selectedItem.label)
-                            .. " x" .. math.floor(state.quantity))
                     else
-                        state.lastCraftStatus = nil
-                        notify("Не удалось запросить крафт: " .. tostring(res), "err")
+                        -- «СКРАФТИТЬ»
+                        local ok, res, status = api.requestCraft(state.selectedItem, state.quantity)
+                        if ok then
+                            state.lastCraftStatus = status
+                            state.lastCraftCheck = 0
+                            notify("Запрос на крафт отправлен: " .. tostring(state.selectedItem.display or state.selectedItem.label)
+                                .. " x" .. math.floor(state.quantity))
+                        else
+                            state.lastCraftStatus = nil
+                            notify("Не удалось запросить крафт: " .. tostring(res), "err")
+                        end
+                        state.selectedItem = nil
+                        updateList(); requestRedraw()
                     end
-                    state.selectedItem = nil
-                    updateList(); requestRedraw()
                 else
                     if not state.player then
                         setStatus("Нет активного пользователя (встаньте на PIM)", "err")

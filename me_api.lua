@@ -845,7 +845,94 @@ local function addStorageEntry(acc, cell)
     return true
 end
 
--- Информация о хранилище МЭ (ячейки/диски): объём и количество типов.
+-- ===== Диски МЭ (управление ячейками) =====
+-- Стандартная AE2-интеграция OC не обязана отдавать список дисководов,
+-- поэтому все методы пробуются по нескольким именам и молча деградируют:
+-- getDrivesInfo() -> {} (UI покажет «Нет дисководов»),
+-- setDrivePriority/ejectDrive -> false, причина.
+
+-- Вызывает первый существующий метод из списка имён.
+-- Возвращает: found(boolean), result, err, methodName.
+local function callAnyMethod(target, names, ...)
+    if not target then return false, nil, "компонент недоступен", nil end
+    for _, name in ipairs(names) do
+        local okFn, fn = pcall(function() return target[name] end)
+        if okFn and type(fn) == "function" then
+            local ok, res = pcall(fn, ...)
+            if ok then return true, res, nil, name end
+            return false, nil, tostring(res), name
+        end
+    end
+    return false, nil, "метод не поддерживается сборкой", nil
+end
+
+-- Нормализует запись диска/ячейки в единый вид.
+local function normalizeDrive(entry, fallbackSlot)
+    local slot = tonumber(entry.slot or entry.index or entry.id) or tonumber(fallbackSlot) or 0
+    return {
+        slot = slot,
+        label = tostring(entry.label or entry.name or ("Диск " .. tostring(slot))),
+        usedBytes = tonumber(entry.usedBytes or entry.usedbytes or entry.bytesUsed) or 0,
+        totalBytes = tonumber(entry.totalBytes or entry.totalbytes or entry.bytesTotal or entry.total),
+        usedTypes = tonumber(entry.usedTypes or entry.usedtypes or entry.typesUsed) or 0,
+        totalTypes = tonumber(entry.totalTypes or entry.totaltypes or entry.typesTotal),
+        priority = tonumber(entry.priority or entry.prio),
+        -- есть ли у сборки вообще управление этим диском
+        canSetPriority = entry.canSetPriority ~= false,
+        canEject = entry.canEject ~= false,
+    }
+end
+
+-- Список дисководов/ячеек: { slot, label, usedBytes, totalBytes, usedTypes,
+-- totalTypes, priority }. Пустой список, если сборка не умеет их отдавать.
+function api.getDrivesInfo()
+    local okMe, me = pcall(function() return component.me_interface end)
+    if not okMe or not me then return {} end
+
+    local found, raw = callAnyMethod(me, { "getDrives", "getCells", "getDriveList" })
+    if not found or type(raw) ~= "table" then return {} end
+
+    local out = {}
+    for key, entry in pairs(raw) do
+        if type(entry) == "table" then
+            out[#out + 1] = normalizeDrive(entry, key)
+        end
+    end
+    table.sort(out, function(a, b) return a.slot < b.slot end)
+    return out
+end
+
+-- Меняет приоритет диска. Возвращает true или false, причина.
+function api.setDrivePriority(slot, priority)
+    local okMe, me = pcall(function() return component.me_interface end)
+    if not okMe or not me then return false, "me_interface недоступен" end
+    if tonumber(slot) == nil then return false, "не указан слот" end
+
+    local value = math.floor(tonumber(priority) or 0)
+    local found, _, err = callAnyMethod(me,
+        { "setDrivePriority", "setPriority", "setCellPriority" }, tonumber(slot), value)
+    if not found then
+        return false, tostring(err or "смена приоритета не поддерживается")
+    end
+    return true
+end
+
+-- Выгружает диск в PIM игрока. Возвращает true или false, причина.
+-- playerName используется, если сборка умеет выгружать прямо в инвентарь.
+function api.ejectDrive(slot, playerName)
+    local okMe, me = pcall(function() return component.me_interface end)
+    if not okMe or not me then return false, "me_interface недоступен" end
+    if tonumber(slot) == nil then return false, "не указан слот" end
+
+    local found, _, err = callAnyMethod(me,
+        { "ejectDrive", "ejectItem", "ejectCell" }, tonumber(slot), playerName)
+    if not found then
+        return false, tostring(err or "выгрузка диска не поддерживается")
+    end
+    return true
+end
+
+
 --
 -- Как это работает:
 --   1) Если у me_interface есть getCells()/getDrives() — берём данные оттуда (точно).
