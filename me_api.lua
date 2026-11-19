@@ -725,15 +725,23 @@ function api.getNetworkInfo()
         energyStored = nil, energyMax = nil, cpus = nil,
         avgPowerInjection = nil, avgPowerUsage = nil,
     }
-    
-    -- Считаем предметы (из TTL-кэша)
+
+    -- Количество уникальных предметов (типов) в сети — из TTL-кэша.
+    -- Раньше здесь суммировались item.size по всем записям, из-за чего
+    -- «Предметов» показывало общий объём стопок (91 261) вместо числа
+    -- типов (104) и не совпадало с healthcheck.history.
+    -- Сумма больше не считается: цикл по всем записям только замедлял замер API.
     local items = getRawItems(false)
+    local uniqueCount = 0
     if type(items) == "table" then
-        info.totalTypes = #items
-        for _, item in ipairs(items) do
-            info.totalItems = info.totalItems + (item.size or 0)
+        for _, item in pairs(items) do
+            if type(item) == "table" and (item.name or item.label) then
+                uniqueCount = uniqueCount + 1
+            end
         end
     end
+    info.totalTypes = uniqueCount
+    info.totalItems = uniqueCount
     
     -- Энергия сети.
     -- В AE2-интеграции OpenComputers методы называются getStoredPower/getMaxStoredPower
