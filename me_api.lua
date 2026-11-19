@@ -442,9 +442,17 @@ function api.requestCraft(craftableObject, amount)
     return requestCraftCore(craftableObject, amount)
 end
 
--- Автоматический крафт по лимитам: системная операция без проверки прав
--- конкретного игрока (запускается самим компьютером).
-function api.autoCraft(craftableObject, amount)
+-- Автоматический крафт по лимитам.
+-- actor обязателен: системный вызов без игрока больше не обходит права.
+-- Требуется роль user+ и разрешение canCraft (личное + глобальный allowUserCraft).
+function api.autoCraft(actorName, craftableObject, amount)
+    if not actorName then return false, "forbidden" end
+    if (db.getRoleLevel(actorName) or 0) < (config.LEVEL_USER or 2) then
+        return false, "forbidden"
+    end
+    local denied = checkPermission(actorName, "canCraft", "заказывать крафт")
+    if denied then return false, denied end
+
     return requestCraftCore(craftableObject, amount)
 end
 
@@ -902,32 +910,49 @@ function api.getDrivesInfo()
     return out
 end
 
--- Меняет приоритет диска. Возвращает true или false, причина.
-function api.setDrivePriority(slot, priority)
+-- Меняет приоритет диска. actor обязателен (admin+).
+-- Возвращает true или false, причина; false от метода сборки тоже ошибка.
+function api.setDrivePriority(actorName, slot, priority)
+    if not actorName then return false, "forbidden" end
+    if (db.getRoleLevel(actorName) or 0) < (config.LEVEL_ADMIN or 4) then
+        return false, "forbidden"
+    end
+
     local okMe, me = pcall(function() return component.me_interface end)
     if not okMe or not me then return false, "me_interface недоступен" end
     if tonumber(slot) == nil then return false, "не указан слот" end
 
     local value = math.floor(tonumber(priority) or 0)
-    local found, _, err = callAnyMethod(me,
+    local found, res, err = callAnyMethod(me,
         { "setDrivePriority", "setPriority", "setCellPriority" }, tonumber(slot), value)
     if not found then
         return false, tostring(err or "смена приоритета не поддерживается")
     end
+    if res == false then
+        return false, "смена приоритета отклонена сборкой"
+    end
     return true
 end
 
--- Выгружает диск в PIM игрока. Возвращает true или false, причина.
--- playerName используется, если сборка умеет выгружать прямо в инвентарь.
-function api.ejectDrive(slot, playerName)
+-- Выгружает диск в PIM игрока. actor обязателен (admin+).
+-- Возвращает true или false, причина; false от метода сборки тоже ошибка.
+function api.ejectDrive(actorName, slot)
+    if not actorName then return false, "forbidden" end
+    if (db.getRoleLevel(actorName) or 0) < (config.LEVEL_ADMIN or 4) then
+        return false, "forbidden"
+    end
+
     local okMe, me = pcall(function() return component.me_interface end)
     if not okMe or not me then return false, "me_interface недоступен" end
     if tonumber(slot) == nil then return false, "не указан слот" end
 
-    local found, _, err = callAnyMethod(me,
-        { "ejectDrive", "ejectItem", "ejectCell" }, tonumber(slot), playerName)
+    local found, res, err = callAnyMethod(me,
+        { "ejectDrive", "ejectItem", "ejectCell" }, tonumber(slot), actorName)
     if not found then
         return false, tostring(err or "выгрузка диска не поддерживается")
+    end
+    if res == false then
+        return false, "выгрузка диска отклонена сборкой"
     end
     return true
 end
@@ -1080,14 +1105,16 @@ function api.depositAll()
     if size == 0 then return 0, "Инвентарь пуст" end
     
     local totalBefore = getTotalNetworkCount(true)
+    local totalToDeposit = 0
     local deposited = {} -- label -> count
-    
+
     for slot = 1, size do
         local sOk, stack = pcall(function() return pim.getStackInSlot(slot) end)
         if sOk and stack then
             -- Поддержка форматов OpenPeripheral (qty) и OC (size)
             local stackCount = stack.qty or stack.size or 0
             if stackCount > 0 then
+                totalToDeposit = totalToDeposit + stackCount
                 local pOk, pushed = pcall(function() return pim.pushItem(config.side_push, slot, stackCount) end)
                 if pOk and tonumber(pushed) and tonumber(pushed) > 0 then
                     local n = math.floor(tonumber(pushed))
@@ -1109,13 +1136,18 @@ function api.depositAll()
         db.addLog(player, "put", lbl, n)
     end
     
-    -- Проверка: всё ли реально попало в МЭ
+    -- Проверка: всё ли реально попало в МЭ и весь ли инвентарь сдан
     os.sleep(0.5)
     local totalAfter = getTotalNetworkCount(true)
-    if totalBefore ~= nil and totalAfter ~= nil and math.floor(totalAfter - totalBefore) < moved then
-        return moved, "Некоторые предметы не попали в МЭ-сеть — заберите их из ME Interface вручную"
-    end
+    local networkLost = totalBefore ~= nil and totalAfter ~= nil
+        and math.floor(totalAfter - totalBefore) < moved
+    local partial = networkLost or (moved < totalToDeposit)
     api.getNetworkItems(true) -- сброс кэша: актуальные цифры после массовой сдачи
+    if partial then
+        return moved, string.format(
+            "ВНИМАНИЕ: сдано %d из %d — часть предметов осталась в инвентаре",
+            math.floor(moved), math.floor(totalToDeposit))
+    end
     return moved, "Сдано всё: " .. math.floor(moved) .. " шт."
 end
 

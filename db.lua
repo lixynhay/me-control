@@ -3,7 +3,23 @@ local filesystem = require("filesystem")
 
 local db = {}
 local DB_PATH = "/home/database.dat"
+local DB_LOG_PATH = "/home/database.log"
 local data = nil
+
+-- Диагностика повреждённых записей: пишем в отдельный лог, не ломая загрузку.
+-- Любая ошибка записи игнорируется — аудит не должен мешать работе панели.
+local function logWarning(message)
+    local okT, t = pcall(os.time)
+    local stamp = (okT and tonumber(t)) or 0
+    local line = string.format("[%s] %s\n", tostring(stamp), tostring(message))
+    pcall(function()
+        local f = io.open(DB_LOG_PATH, "a")
+        if f then
+            f:write(line)
+            f:close()
+        end
+    end)
+end
 
 -- Глобальные права по умолчанию. true = текущее фактическое поведение при
 -- отсутствии ключа (nil трактуется как «разрешено»), но теперь состояние явное.
@@ -161,16 +177,27 @@ function db.load()
             data.logs = {}
             changed = true
         end
-        for _, p in pairs(data.players) do
-            if p.banReason == nil then p.banReason = ""; changed = true end
-            if p.banExpires == nil then p.banExpires = 0; changed = true end
-            -- Миграция: персональные права (появились в v1.7.0)
-            if p.canWithdraw == nil then p.canWithdraw = true; changed = true end
-            if p.canDeposit == nil then p.canDeposit = true; changed = true end
-            if p.canCraft == nil then p.canCraft = true; changed = true end
-            -- Миграция: статистика профиля (v1.7.1)
-            if p.totalActions == nil then p.totalActions = 0; changed = true end
-            if p.lastSeen == nil then p.lastSeen = 0; changed = true end
+        local brokenPlayers = {}
+        for name, p in pairs(data.players) do
+            if type(p) ~= "table" then
+                -- Битая запись (строка/число) не должна ронять загрузку всей БД.
+                brokenPlayers[#brokenPlayers + 1] = name
+            else
+                if p.banReason == nil then p.banReason = ""; changed = true end
+                if p.banExpires == nil then p.banExpires = 0; changed = true end
+                -- Миграция: персональные права (появились в v1.7.0)
+                if p.canWithdraw == nil then p.canWithdraw = true; changed = true end
+                if p.canDeposit == nil then p.canDeposit = true; changed = true end
+                if p.canCraft == nil then p.canCraft = true; changed = true end
+                -- Миграция: статистика профиля (v1.7.1)
+                if p.totalActions == nil then p.totalActions = 0; changed = true end
+                if p.lastSeen == nil then p.lastSeen = 0; changed = true end
+            end
+        end
+        for _, name in ipairs(brokenPlayers) do
+            data.players[name] = nil
+            changed = true
+            logWarning("db.load: пропущена битая запись игрока: " .. tostring(name))
         end
         if changed then backupOnce(loadedPath) end
     end
@@ -235,9 +262,42 @@ function db.save()
         filesystem.remove(tmpPath)
         return false, "Ошибка сохранения БД"
     end
-    if filesystem.exists(DB_PATH) then filesystem.remove(DB_PATH) end
     local renamed, renameErr = filesystem.rename(tmpPath, DB_PATH)
     if not renamed then
+        -- rename мог не сработать из-за существующего database.dat. Не удаляем
+        -- оригинал заранее: сначала пробуем copy поверх, затем remove + rename.
+        local original = nil
+        if filesystem.exists(DB_PATH) then
+            local src = io.open(DB_PATH, "r")
+            if src then
+                original = src:read("*a")
+                src:close()
+            end
+        end
+
+        local copied = false
+        if type(filesystem.copy) == "function" then
+            local okCopy = filesystem.copy(tmpPath, DB_PATH)
+            copied = (okCopy == true)
+        end
+        if copied then
+            filesystem.remove(tmpPath)
+            return true
+        end
+
+        if filesystem.exists(DB_PATH) then filesystem.remove(DB_PATH) end
+        local renamed2 = filesystem.rename(tmpPath, DB_PATH)
+        if renamed2 then return true end
+
+        -- Оба способа не сработали — возвращаем прежнее содержимое, чтобы
+        -- не потерять БД, и сообщаем об ошибке наверх.
+        if original ~= nil then
+            local dst = io.open(DB_PATH, "w")
+            if dst then
+                pcall(function() dst:write(original) end)
+                dst:close()
+            end
+        end
         filesystem.remove(tmpPath)
         return false, "Ошибка сохранения БД"
     end
@@ -359,25 +419,27 @@ function db.setRole(actorName, targetName, newRole)
     if db.ROLE_LEVELS[newRole] == nil then
         return false, "Неизвестная роль: " .. tostring(newRole)
     end
-    if targetName == "lixynhay" then
-        if actorName ~= "lixynhay" then
-            return false, "Нельзя менять права Технического Администратора"
-        end
-        if newRole ~= "techadmin" then
-            return false, "Роль techadmin нельзя снять"
-        end
+
+    -- Себе роль менять нельзя никому: иначе admin может выдать себе techadmin.
+    if actorName == nil then
+        return false, "Не указан игрок"
+    end
+    if actorName == targetName then
+        return false, "Нельзя менять свою роль"
     end
 
-    -- Себе роль менять нельзя; над другими — только если ты строго выше
-    if actorName ~= targetName then
-        local ok, err = db.hasPermission(actorName, targetName, "setRole")
-        if not ok then return false, err end
+    if targetName == "lixynhay" then
+        return false, "Нельзя менять права Технического Администратора"
+    end
 
-        -- Нельзя выдать роль не ниже своей
-        local actorLevel = db.getRoleLevel(actorName)
-        if (db.ROLE_LEVELS[newRole] or 0) >= actorLevel then
-            return false, "Нельзя выдать роль не ниже своей"
-        end
+    -- hasPermission: actor зарегистрирован, уровень >= admin, цель строго ниже.
+    local ok, err = db.hasPermission(actorName, targetName, "setRole")
+    if not ok then return false, err end
+
+    -- Нельзя выдать роль не ниже своей (в том числе admin -> techadmin).
+    local actorLevel = db.getRoleLevel(actorName)
+    if (db.ROLE_LEVELS[newRole] or 0) >= actorLevel then
+        return false, "Нельзя выдать роль не ниже своей"
     end
 
     data.players[targetName].role = newRole
@@ -406,12 +468,22 @@ function db.getConfig()
     return cfg
 end
 
--- Изменить глобальную настройку
-function db.setConfig(key, value)
-    if data and data.config then
-        data.config[key] = value
-        db.save()
+-- Изменить глобальную настройку.
+-- actor обязателен: прямые вызовы без прав (в т.ч. из сторонних скриптов) запрещены.
+function db.setConfig(actorName, key, value)
+    if not actorName then return false, "forbidden" end
+    local level = db.getRoleLevel(actorName)
+    if level < (db.ROLE_LEVELS["admin"] or 4) then
+        return false, "forbidden"
     end
+    if not data then return false, "forbidden" end
+    if type(key) ~= "string" or key == "" then
+        return false, "Некорректный ключ"
+    end
+    if type(data.config) ~= "table" then data.config = defaultConfig() end
+    data.config[key] = value
+    db.save()
+    return true
 end
 
 -- Получить лимиты предметов
@@ -529,9 +601,15 @@ function db.getLogs(playerName, limit)
     return out
 end
 
--- Полностью очистить журнал операций
-function db.clearLogs()
-    if not data then return false end
+-- Полностью очистить журнал операций.
+-- actor обязателен: очистка доступна модератору и выше.
+function db.clearLogs(actorName)
+    if not actorName then return false, "forbidden" end
+    local level = db.getRoleLevel(actorName)
+    if level < (db.ROLE_LEVELS["moderator"] or 3) then
+        return false, "forbidden"
+    end
+    if not data then return false, "Нет данных" end
     data.logs = {}
     db.save()
     return true

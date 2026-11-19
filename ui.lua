@@ -1745,13 +1745,13 @@ function ui.drawDashboard(W, H, state)
     gpu.setForeground(C.white)
     gpu.set(leftX, y, "Предметов:")
     gpu.setForeground(C.ok)
-    gpu.set(leftX + 18, y, tostring(info.totalItems or 0))
-    y = y + 1
-
-    gpu.setForeground(C.white)
-    gpu.set(leftX, y, "Типов:")
-    gpu.setForeground(C.ok)
-    gpu.set(leftX + 18, y, tostring(info.totalTypes or 0))
+    -- Типы показываем в той же строке (раньше была отдельная дублирующая строка).
+    local itemCount = tostring(info.totalItems or 0)
+    local typeCount = tonumber(info.totalTypes)
+    if typeCount then
+        itemCount = itemCount .. " (" .. tostring(math.floor(typeCount)) .. " тип.)"
+    end
+    gpu.set(leftX + 18, y, itemCount)
     y = y + 1
 
     gpu.setForeground(C.white)

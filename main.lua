@@ -205,6 +205,9 @@ end
 
 -- Одна итерация автокрафта. Возвращает true, если был отправлен хотя бы один запрос.
 local function runAutoCraft()
+    -- Без активного игрока нет актора — автокрафт запрещён (см. api.autoCraft).
+    if not state.player then return false end
+
     local status = api.getThresholdStatus()
     local now = computer.uptime()
     local sent = false
@@ -220,7 +223,7 @@ local function runAutoCraft()
                     if diff < 1 then diff = 1 end
                     local amount = diff > AUTO_CRAFT_STACK and AUTO_CRAFT_STACK or diff
 
-                    local ok = api.autoCraft(craftable, amount)
+                    local ok = api.autoCraft(state.player, craftable, amount)
                     if ok then
                         state.lastAutoCrafts[item.name] = now
                         sent = true
@@ -1148,11 +1151,15 @@ while true do
             -- «ОЧИСТИТЬ»: первое нажатие взводит, второе (в течение 3 сек) очищает
             local now = computer.uptime()
             if state.logClearArmed and (now - (state.logClearTime or 0)) <= 3 then
-                db.clearLogs()
+                local okClear, clearErr = db.clearLogs(state.player)
                 state.logClearArmed = false
-                state.logsPage = 1
-                updateList(); requestRedraw()
-                notify("Журнал операций очищен")
+                if okClear then
+                    state.logsPage = 1
+                    updateList(); requestRedraw()
+                    notify("Журнал операций очищен")
+                else
+                    notify(tostring(clearErr or "Не удалось очистить журнал"), "err")
+                end
             else
                 state.logClearArmed = true
                 state.logClearTime = now
@@ -1230,7 +1237,7 @@ while true do
                             if hitRect(slotL.plus) then
                                 drivesHandled = true
                                 local newPrio = (tonumber(d.priority) or 0) + 1
-                                local okP, pErr = api.setDrivePriority(d.slot, newPrio)
+                                local okP, pErr = api.setDrivePriority(state.player, d.slot, newPrio)
                                 if okP then
                                     notify("Приоритет диска " .. tostring(d.slot) .. ": " .. tostring(newPrio))
                                     state.drives = api.getDrivesInfo() or {}
@@ -1241,7 +1248,7 @@ while true do
                             elseif hitRect(slotL.minus) then
                                 drivesHandled = true
                                 local newPrio = (tonumber(d.priority) or 0) - 1
-                                local okP, pErr = api.setDrivePriority(d.slot, newPrio)
+                                local okP, pErr = api.setDrivePriority(state.player, d.slot, newPrio)
                                 if okP then
                                     notify("Приоритет диска " .. tostring(d.slot) .. ": " .. tostring(newPrio))
                                     state.drives = api.getDrivesInfo() or {}
@@ -1251,7 +1258,7 @@ while true do
                                 requestRedraw()
                             elseif hitRect(slotL.eject) then
                                 drivesHandled = true
-                                local okE, eErr = api.ejectDrive(d.slot, state.player)
+                                local okE, eErr = api.ejectDrive(state.player, d.slot)
                                 if okE then
                                     notify("Диск " .. tostring(d.slot) .. " выгружен в инвентарь")
                                     state.drives = api.getDrivesInfo() or {}
